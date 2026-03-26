@@ -42,15 +42,13 @@ echo "Detected platform: $PLATFORM"
 
 ensure_uv
 
-# Install PyTorch with the right index for the platform.
+# Create venv and install all dependencies from pyproject.toml.
+uv sync
+
+# For ROCm, reinstall PyTorch from the ROCm index (overrides the PyPI version).
 if [ "$PLATFORM" = "linux-rocm" ]; then
-    echo "Installing PyTorch with ROCm support..."
-    uv pip install --project . torch torchvision --index-url "$ROCM_INDEX"
-else
-    echo "Installing PyTorch (standard)..."
-    uv pip install --project . torch torchvision
+    echo "Reinstalling PyTorch with ROCm support..."
+    uv pip install torch torchvision --index-url "$ROCM_INDEX" --reinstall-package torch --reinstall-package torchvision
 fi
 
-# Install remaining dependencies via the project.
-uv sync
 echo "Setup complete."
