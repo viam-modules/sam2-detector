@@ -2,8 +2,15 @@
   "$schema": "https://dl.viam.dev/module.schema.json",
   "module_id": "viam:sam2-detector",
   "visibility": "public",
-  "url": "",
+  "url": "https://github.com/viam-modules/sam2-detector/",
   "description": "Modular vision service: sam2",
+  "models": [
+    {
+      "api": "rdk:service:vision",
+      "model": "viam:sam2-detector:sam2",
+      "markdown_link": "viam_sam2-detector_sam2.md"
+    }
+  ],
   "applications": null,
   "markdown_link": "README.md",
   "entrypoint": "dist/main",
@@ -11,7 +18,7 @@
   "build": {
     "build": "./build.sh",
     "setup": "./setup.sh",
-    "path": "dist/archive.tar.gz",
+    "path": "module.tar.gz",
     "arch": [
       "linux/amd64",
       "linux/arm64",
