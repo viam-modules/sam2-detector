@@ -16,11 +16,14 @@ from viam.media.video import ViamImage
 from viam.proto.app.robot import ComponentConfig
 from viam.proto.common import PointCloudObject, ResourceName
 from viam.proto.service.vision import Classification, Detection, GetPropertiesResponse
+from viam.logging import getLogger
 from viam.resource.base import ResourceBase
 from viam.resource.easy_resource import EasyResource
 from viam.resource.types import Model, ModelFamily
 from viam.services.vision import *
 from viam.utils import ValueTypes
+
+LOGGER = getLogger(__name__)
 
 OBJ_ID = 1
 # Max frames to keep in the sliding window. Older frames are discarded.
@@ -56,14 +59,14 @@ def _find_bundled_checkpoint(model_name: str) -> Optional[Tuple[str, str]]:
     return None
 
 
-def _load_predictor(model_name: str, device: str, logger) -> SAM2VideoPredictor:
+def _load_predictor(model_name: str, device: str) -> SAM2VideoPredictor:
     """Load SAM2 VideoPredictor, preferring a bundled checkpoint over HuggingFace download."""
     bundled = _find_bundled_checkpoint(model_name)
     if bundled is not None:
         config_name, ckpt_path = bundled
-        logger.info(f"Loading from bundled checkpoint: {ckpt_path}")
+        LOGGER.info(f"Loading from bundled checkpoint: {ckpt_path}")
         return build_sam2_video_predictor(config_name, ckpt_path, device=device)
-    logger.info(f"No bundled checkpoint found, downloading from HuggingFace: {model_name}")
+    LOGGER.info(f"No bundled checkpoint found, downloading from HuggingFace: {model_name}")
     return SAM2VideoPredictor.from_pretrained(model_name, device=device)
 
 
@@ -122,14 +125,17 @@ class Sam2(Vision, EasyResource):
         instance._camera_name = attrs["camera_name"].string_value
         from viam.components.camera import Camera
         instance._camera = dependencies[Camera.get_resource_name(instance._camera_name)]
+        LOGGER.info(f"Using camera: {instance._camera_name}")
 
         if "initial_point_x" in attrs and "initial_point_y" in attrs:
             instance._initial_point = (
                 int(attrs["initial_point_x"].number_value),
                 int(attrs["initial_point_y"].number_value),
             )
+            LOGGER.info(f"Initial point: {instance._initial_point}")
         else:
             instance._initial_point = None
+            LOGGER.warn("No initial point configured; tracking will not start until set_point is called")
 
         if "label" in attrs:
             instance._label = attrs["label"].string_value
@@ -146,9 +152,9 @@ class Sam2(Vision, EasyResource):
         instance._frame_dir = tempfile.mkdtemp(prefix="sam2_frames_")
 
         instance._device = _select_device()
-        instance.logger.info(f"Loading SAM2 model {instance._model_name} on {instance._device}")
-        instance._predictor = _load_predictor(instance._model_name, instance._device, instance.logger)
-        instance.logger.info("SAM2 model loaded")
+        LOGGER.info(f"Loading SAM2 model {instance._model_name} on {instance._device}")
+        instance._predictor = _load_predictor(instance._model_name, instance._device)
+        LOGGER.info("SAM2 model loaded")
         return instance
 
     @classmethod
@@ -209,6 +215,7 @@ class Sam2(Vision, EasyResource):
         shutil.rmtree(self._frame_dir, ignore_errors=True)
         self._frame_dir = new_dir
         self._window_start = new_start
+        LOGGER.debug(f"Compacted window: dropped {drop_count} frames, keeping {keep_count}")
 
     def _run_propagation(self):
         """Run SAM2 video propagation on frames in the current window."""
@@ -216,6 +223,7 @@ class Sam2(Vision, EasyResource):
         if window_size == 0 or self._initial_point is None:
             return
 
+        LOGGER.debug(f"Running propagation on {window_size} frames")
         state = self._predictor.init_state(video_path=self._frame_dir)
 
         # Add initial point prompt on the first frame in the window.
@@ -248,6 +256,7 @@ class Sam2(Vision, EasyResource):
         if self._detections:
             max_idx = max(self._detections.keys())
             self._last_detection = self._detections[max_idx]
+        LOGGER.debug(f"Propagation complete: {len(self._detections)}/{window_size} detections")
 
     async def get_detections(
         self,
