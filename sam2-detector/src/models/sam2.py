@@ -1,6 +1,8 @@
 import io
+import os
+import shutil
+import tempfile
 import threading
-from collections import OrderedDict
 from typing import ClassVar, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
@@ -19,8 +21,8 @@ from viam.services.vision import *
 from viam.utils import ValueTypes
 
 OBJ_ID = 1
-IMG_MEAN = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32)[:, None, None]
-IMG_STD = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32)[:, None, None]
+# Max frames to keep in the sliding window. Older frames are discarded.
+DEFAULT_MAX_FRAMES = 300
 
 
 def _select_device() -> str:
@@ -45,70 +47,6 @@ def _viam_image_to_numpy(image: ViamImage) -> np.ndarray:
     return np.array(pil)
 
 
-def _numpy_to_tensor(img_np: np.ndarray, image_size: int) -> Tuple[torch.Tensor, int, int]:
-    """Convert an RGB numpy array to the normalized tensor SAM2 expects."""
-    h, w = img_np.shape[:2]
-    pil = PILImage.fromarray(img_np).resize((image_size, image_size))
-    arr = np.array(pil).astype(np.float32) / 255.0
-    tensor = torch.from_numpy(arr).permute(2, 0, 1)  # (3, H, W)
-    return tensor, h, w
-
-
-def _build_inference_state(
-    predictor: SAM2VideoPredictor,
-    frame_tensors: List[torch.Tensor],
-    video_height: int,
-    video_width: int,
-    device: str,
-    offload_video_to_cpu: bool = False,
-    offload_state_to_cpu: bool = False,
-) -> dict:
-    """Build a SAM2 inference_state dict from in-memory frame tensors."""
-    compute_device = torch.device(device)
-    images = torch.stack(frame_tensors)  # (N, 3, H, W)
-
-    img_mean = IMG_MEAN.clone()
-    img_std = IMG_STD.clone()
-    if not offload_video_to_cpu:
-        images = images.to(compute_device)
-        img_mean = img_mean.to(compute_device)
-        img_std = img_std.to(compute_device)
-    images -= img_mean
-    images /= img_std
-
-    inference_state = {}
-    inference_state["images"] = images
-    inference_state["num_frames"] = len(frame_tensors)
-    inference_state["offload_video_to_cpu"] = offload_video_to_cpu
-    inference_state["offload_state_to_cpu"] = offload_state_to_cpu
-    inference_state["video_height"] = video_height
-    inference_state["video_width"] = video_width
-    inference_state["device"] = compute_device
-    if offload_state_to_cpu:
-        inference_state["storage_device"] = torch.device("cpu")
-    else:
-        inference_state["storage_device"] = compute_device
-    inference_state["point_inputs_per_obj"] = {}
-    inference_state["mask_inputs_per_obj"] = {}
-    inference_state["cached_features"] = {}
-    inference_state["constants"] = {}
-    inference_state["obj_id_to_idx"] = OrderedDict()
-    inference_state["obj_idx_to_id"] = OrderedDict()
-    inference_state["obj_ids"] = []
-    inference_state["output_dict_per_obj"] = {}
-    inference_state["temp_output_dict_per_obj"] = {}
-    inference_state["consolidated_frame_inds"] = {
-        "cond_frame_outputs": set(),
-        "non_cond_frame_outputs": set(),
-    }
-    inference_state["tracking_has_started"] = False
-    inference_state["frames_already_tracked"] = {}
-    inference_state["frames_tracked_per_obj"] = {}
-    # Warm up visual backbone on frame 0.
-    predictor._get_image_feature(inference_state, frame_idx=0, batch_size=1)
-    return inference_state
-
-
 class Sam2(Vision, EasyResource):
     MODEL: ClassVar[Model] = Model(ModelFamily("viam", "sam2-detector"), "sam2")
 
@@ -117,16 +55,17 @@ class Sam2(Vision, EasyResource):
     _initial_point: Optional[Tuple[int, int]] = None
     _label: str = "object"
     _model_name: str = "facebook/sam2.1-hiera-large"
+    _max_frames: int = DEFAULT_MAX_FRAMES
 
-    # In-memory frame buffer: list of preprocessed tensors.
-    _frame_tensors: List[torch.Tensor] = []
-    _video_height: int = 0
-    _video_width: int = 0
-    _frame_count: int = 0
+    # Sliding window of frames stored as numbered JPEGs in a temp dir.
+    # Only the most recent _max_frames are kept.
+    _frame_dir: Optional[str] = None
+    _frame_count: int = 0  # total frames received (monotonic)
+    _window_start: int = 0  # first frame index in the current window
     _frames_since_propagation: int = 0
     _propagation_interval: int = 1
 
-    # Cached detections from the most recent propagation, keyed by frame index.
+    # Cached detections from the most recent propagation.
     _detections: Dict[int, Detection] = {}
     _last_detection: Optional[Detection] = None
     _lock: threading.Lock
@@ -139,8 +78,8 @@ class Sam2(Vision, EasyResource):
         instance._lock = threading.Lock()
         instance._detections = {}
         instance._last_detection = None
-        instance._frame_tensors = []
         instance._frame_count = 0
+        instance._window_start = 0
         instance._frames_since_propagation = 0
         attrs = config.attributes.fields
 
@@ -158,6 +97,13 @@ class Sam2(Vision, EasyResource):
             instance._model_name = attrs["model_name"].string_value
         if "propagation_interval" in attrs:
             instance._propagation_interval = int(attrs["propagation_interval"].number_value)
+        if "max_frames" in attrs:
+            instance._max_frames = int(attrs["max_frames"].number_value)
+        else:
+            instance._max_frames = DEFAULT_MAX_FRAMES
+
+        # Create temp directory for frame JPEG storage.
+        instance._frame_dir = tempfile.mkdtemp(prefix="sam2_frames_")
 
         instance._device = _select_device()
         instance.logger.info(f"Loading SAM2 model {instance._model_name} on {instance._device}")
@@ -178,31 +124,55 @@ class Sam2(Vision, EasyResource):
             raise ValueError("Must provide both initial_point_x and initial_point_y, or neither")
         return [], []
 
-    def _add_frame(self, image_np: np.ndarray) -> int:
-        """Preprocess and buffer a frame in memory. Returns the frame index."""
-        tensor, h, w = _numpy_to_tensor(image_np, self._predictor.image_size)
-        if self._frame_count == 0:
-            self._video_height = h
-            self._video_width = w
-        self._frame_tensors.append(tensor)
-        idx = self._frame_count
+    def _save_frame(self, image_np: np.ndarray) -> int:
+        """Save a frame as a numbered JPEG and maintain the sliding window."""
+        # Window-local index for the JPEG filename.
+        local_idx = self._frame_count - self._window_start
+        path = os.path.join(self._frame_dir, f"{local_idx}.jpeg")
+        PILImage.fromarray(image_np).save(path, quality=90)
+        frame_idx = self._frame_count
         self._frame_count += 1
         self._frames_since_propagation += 1
-        return idx
 
-    def _run_propagation(self):
-        """Run SAM2 video propagation on all buffered frames."""
-        if self._frame_count == 0 or self._initial_point is None:
+        # Evict old frames if we exceed the window size.
+        window_size = self._frame_count - self._window_start
+        if window_size > self._max_frames:
+            self._compact_window()
+
+        return frame_idx
+
+    def _compact_window(self):
+        """Remove old frames, keeping only the most recent max_frames."""
+        window_size = self._frame_count - self._window_start
+        if window_size <= self._max_frames:
             return
 
-        state = _build_inference_state(
-            self._predictor,
-            self._frame_tensors,
-            self._video_height,
-            self._video_width,
-            self._device,
-        )
+        keep_count = self._max_frames
+        drop_count = window_size - keep_count
+        new_start = self._window_start + drop_count
 
+        # Rebuild the temp dir with renumbered files.
+        new_dir = tempfile.mkdtemp(prefix="sam2_frames_")
+        for new_idx in range(keep_count):
+            old_idx = drop_count + new_idx
+            old_path = os.path.join(self._frame_dir, f"{old_idx}.jpeg")
+            new_path = os.path.join(new_dir, f"{new_idx}.jpeg")
+            if os.path.exists(old_path):
+                os.rename(old_path, new_path)
+
+        shutil.rmtree(self._frame_dir, ignore_errors=True)
+        self._frame_dir = new_dir
+        self._window_start = new_start
+
+    def _run_propagation(self):
+        """Run SAM2 video propagation on frames in the current window."""
+        window_size = self._frame_count - self._window_start
+        if window_size == 0 or self._initial_point is None:
+            return
+
+        state = self._predictor.init_state(video_path=self._frame_dir)
+
+        # Add initial point prompt on the first frame in the window.
         self._predictor.add_new_points_or_box(
             state,
             frame_idx=0,
@@ -211,13 +181,15 @@ class Sam2(Vision, EasyResource):
             labels=np.array([1], dtype=np.int32),
         )
 
+        # Propagate and cache detections (keyed by global frame index).
         self._detections = {}
-        for frame_idx, obj_ids, masks_out in self._predictor.propagate_in_video(state):
+        for local_idx, obj_ids, masks_out in self._predictor.propagate_in_video(state):
             mask = (masks_out[0] > 0.0).cpu().numpy().squeeze().astype(bool)
             bbox = _mask_to_bbox(mask)
             if bbox is not None:
                 x_min, y_min, x_max, y_max = bbox
-                self._detections[frame_idx] = Detection(
+                global_idx = self._window_start + local_idx
+                self._detections[global_idx] = Detection(
                     x_min=x_min,
                     y_min=y_min,
                     x_max=x_max,
@@ -241,7 +213,7 @@ class Sam2(Vision, EasyResource):
         image_np = _viam_image_to_numpy(image)
 
         with self._lock:
-            frame_idx = self._add_frame(image_np)
+            frame_idx = self._save_frame(image_np)
 
             if self._frames_since_propagation >= self._propagation_interval:
                 self._run_propagation()
@@ -343,14 +315,17 @@ class Sam2(Vision, EasyResource):
                 self._run_propagation()
             return {
                 "status": "ok",
-                "num_frames": float(self._frame_count),
+                "num_frames": float(self._frame_count - self._window_start),
                 "detections": float(len(self._detections)),
             }
 
         if cmd == "reset":
             with self._lock:
-                self._frame_tensors = []
+                if self._frame_dir:
+                    shutil.rmtree(self._frame_dir, ignore_errors=True)
+                    self._frame_dir = tempfile.mkdtemp(prefix="sam2_frames_")
                 self._frame_count = 0
+                self._window_start = 0
                 self._frames_since_propagation = 0
                 self._detections = {}
                 self._last_detection = None
@@ -358,7 +333,9 @@ class Sam2(Vision, EasyResource):
 
         if cmd == "status":
             return {
-                "num_frames": float(self._frame_count),
+                "total_frames_received": float(self._frame_count),
+                "window_size": float(self._frame_count - self._window_start),
+                "max_frames": float(self._max_frames),
                 "detections_cached": float(len(self._detections)),
                 "device": self._device,
                 "model_name": self._model_name,
