@@ -2,7 +2,7 @@
   "$schema": "https://dl.viam.dev/module.schema.json",
   "module_id": "viam:sam2-detector",
   "visibility": "public",
-  "url": "",
+  "url": "https://github.com/viam-modules/sam2-detector/",
   "description": "Modular vision service: sam2",
   "applications": null,
   "markdown_link": "README.md",
