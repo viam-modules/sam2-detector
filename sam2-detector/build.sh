@@ -4,9 +4,11 @@ cd "$(dirname "$0")"
 
 SAM2_MODEL="${SAM2_MODEL:-facebook/sam2.1-hiera-tiny}"
 
-# Use uv if available, otherwise fall back to a local venv.
+
 if command -v uv >/dev/null 2>&1; then
     UV_PROJECT="$(pwd)/.."
+
+    # Build PyInstaller binary.
     uv run --project "$UV_PROJECT" pyinstaller \
         --onefile \
         --hidden-import="googleapiclient" \
@@ -23,7 +25,8 @@ if command -v uv >/dev/null 2>&1; then
 else
     VENV_NAME="venv"
     PYTHON="$VENV_NAME/bin/python"
-    $PYTHON -m pip install pyinstaller -Uqq
+
+    # Build PyInstaller binary.
     $PYTHON -m PyInstaller \
         --onefile \
         --hidden-import="googleapiclient" \

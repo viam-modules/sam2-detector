@@ -4,10 +4,15 @@ import shutil
 import sys
 import tempfile
 import threading
+from functools import partialmethod
 from typing import ClassVar, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
+import tqdm
+
+# Disable tqdm progress bars — they write to stderr which Viam logs as errors.
+tqdm.tqdm.__init__ = partialmethod(tqdm.tqdm.__init__, disable=True)
 from PIL import Image as PILImage
 from sam2.build_sam import build_sam2_video_predictor, HF_MODEL_ID_TO_FILENAMES
 from sam2.sam2_video_predictor import SAM2VideoPredictor
