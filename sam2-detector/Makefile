@@ -4,7 +4,7 @@
 #   facebook/sam2.1-hiera-tiny       (149MB)
 #   facebook/sam2.1-hiera-small      (176MB)
 #   facebook/sam2.1-hiera-base-plus  (309MB)
-#   facebook/sam2.1-hiera-tiny      (856MB)
+#   facebook/sam2.1-hiera-large      (856MB)
 #
 # Usage:
 #   make module                          # Build PyInstaller binary
@@ -13,8 +13,6 @@
 #   make clean                           # Remove all build artifacts
 
 SAM2_MODEL ?= facebook/sam2.1-hiera-tiny
-VENV = ../venv
-PYTHON = $(VENV)/bin/python
 UV = uv
 
 # Derive checkpoint filename from model ID via the SAM2 lookup table.
@@ -32,17 +30,11 @@ checkpoints/$(CKPT_NAME):
 	@mkdir -p checkpoints
 	$(UV) run --project .. python -c "from huggingface_hub import hf_hub_download; import shutil; path = hf_hub_download('$(SAM2_MODEL)', '$(CKPT_NAME)'); shutil.copy(path, 'checkpoints/$(CKPT_NAME)'); print('Downloaded checkpoints/$(CKPT_NAME)')"
 
-# Build the PyInstaller binary.
+# Build the PyInstaller binary via build.sh.
 module: dist/main
 
 dist/main: src/main.py src/models/sam2.py
-	$(UV) run --project .. pyinstaller \
-		--onefile \
-		--hidden-import="googleapiclient" \
-		--hidden-import="viam" \
-		--hidden-import="sam2" \
-		src/main.py
-	@echo "Built dist/main"
+	./build.sh
 
 # Build the distributable tarball with the module binary, metadata, and model checkpoint.
 module.tar.gz: dist/main checkpoints/$(CKPT_NAME)

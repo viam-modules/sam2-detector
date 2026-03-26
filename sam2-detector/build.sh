@@ -1,13 +1,25 @@
 #!/bin/sh
-cd `dirname $0`
+set -e
+cd "$(dirname "$0")"
 
-# Create a virtual environment to run our code
-VENV_NAME="venv"
-PYTHON="$VENV_NAME/bin/python"
-
-if ! $PYTHON -m pip install pyinstaller -Uqq; then
-    exit 1
+# Use uv if available, otherwise fall back to a local venv.
+if command -v uv >/dev/null 2>&1; then
+    uv run --project .. pyinstaller \
+        --onefile \
+        --hidden-import="googleapiclient" \
+        --hidden-import="viam" \
+        --hidden-import="sam2" \
+        src/main.py
+else
+    VENV_NAME="venv"
+    PYTHON="$VENV_NAME/bin/python"
+    $PYTHON -m pip install pyinstaller -Uqq
+    $PYTHON -m PyInstaller \
+        --onefile \
+        --hidden-import="googleapiclient" \
+        --hidden-import="viam" \
+        --hidden-import="sam2" \
+        src/main.py
 fi
 
-$PYTHON -m PyInstaller --onefile --hidden-import="googleapiclient" src/main.py
-tar -czvf dist/archive.tar.gz meta.json ./dist/main
+echo "Built dist/main"
