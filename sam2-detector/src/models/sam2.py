@@ -304,12 +304,27 @@ class Sam2(Vision, EasyResource):
         extra: Optional[Mapping[str, ValueTypes]] = None,
         timeout: Optional[float] = None,
     ) -> CaptureAllResult:
-        detections = None
-        if return_detections:
-            detections = await self.get_detections_from_camera(
-                camera_name, extra=extra, timeout=timeout
+        if camera_name not in (self._camera_name, ""):
+            raise ValueError(
+                f"Camera name '{camera_name}' does not match "
+                f"configured camera '{self._camera_name}'."
             )
-        return CaptureAllResult(detections=detections)
+
+        result = CaptureAllResult()
+
+        images, _ = await self._camera.get_images()
+        if images is None or len(images) == 0:
+            raise ValueError("No images returned by get_images")
+
+        if return_image:
+            result.image = images[0]
+
+        if return_detections:
+            result.detections = await self.get_detections(
+                images[0], extra=extra, timeout=timeout
+            )
+
+        return result
 
     async def get_classifications_from_camera(
         self,
