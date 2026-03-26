@@ -4,15 +4,46 @@ import shutil
 import sys
 import tempfile
 import threading
-from functools import partialmethod
 from typing import ClassVar, Dict, List, Mapping, Optional, Sequence, Tuple
+
+# Disable tqdm progress bars before any other imports — SAM2 uses tqdm internally
+# and the output goes to stderr, which Viam logs as errors.
+import tqdm as _tqdm_module
+import tqdm.auto as _tqdm_auto_module
+
+
+class _SilentTqdm:
+    """A no-op tqdm replacement that acts as an identity iterator."""
+    def __init__(self, iterable=None, *args, **kwargs):
+        self._iterable = iterable
+
+    def __iter__(self):
+        return iter(self._iterable) if self._iterable is not None else iter([])
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        pass
+
+    def update(self, n=1):
+        pass
+
+    def close(self):
+        pass
+
+    def set_description(self, desc=None, refresh=True):
+        pass
+
+
+_tqdm_module.tqdm = _SilentTqdm
+_tqdm_auto_module.tqdm = _SilentTqdm
+
+import warnings
+warnings.filterwarnings("ignore", message="cannot import name '_C' from 'sam2'")
 
 import numpy as np
 import torch
-import tqdm
-
-# Disable tqdm progress bars — they write to stderr which Viam logs as errors.
-tqdm.tqdm.__init__ = partialmethod(tqdm.tqdm.__init__, disable=True)
 from PIL import Image as PILImage
 from sam2.build_sam import build_sam2_video_predictor, HF_MODEL_ID_TO_FILENAMES
 from sam2.sam2_video_predictor import SAM2VideoPredictor
