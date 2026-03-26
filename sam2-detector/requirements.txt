@@ -1,4 +1,7 @@
-
-viam-sdk==0.73.0
-
+viam-sdk
 typing-extensions
+numpy
+pillow
+torch
+torchvision
+sam-2 @ git+https://github.com/facebookresearch/sam2.git
