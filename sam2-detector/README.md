@@ -19,7 +19,7 @@ A Viam vision service module that uses Meta's [SAM2](https://github.com/facebook
 {
   "initial_point_x": 600,
   "initial_point_y": 300,
-  "model_name": "facebook/sam2.1-hiera-large",
+  "model_name": "facebook/sam2.1-hiera-tiny",
   "label": "glass",
   "propagation_interval": 1,
   "max_frames": 300
@@ -30,7 +30,7 @@ A Viam vision service module that uses Meta's [SAM2](https://github.com/facebook
 |---|---|---|---|---|
 | `initial_point_x` | int | yes | - | X pixel coordinate of the object to track in the first frame |
 | `initial_point_y` | int | yes | - | Y pixel coordinate of the object to track in the first frame |
-| `model_name` | string | no | `facebook/sam2.1-hiera-large` | HuggingFace model ID. Options: `facebook/sam2.1-hiera-small`, `facebook/sam2.1-hiera-large` |
+| `model_name` | string | no | `facebook/sam2.1-hiera-tiny` | HuggingFace model ID. Options: `facebook/sam2.1-hiera-small`, `facebook/sam2.1-hiera-tiny` |
 | `label` | string | no | `object` | Class name returned in detections |
 | `propagation_interval` | int | no | `1` | Re-run SAM2 propagation every N frames. Higher values reduce compute but increase detection latency. |
 | `max_frames` | int | no | `300` | Maximum frames to keep in the sliding window. Older frames are discarded to bound disk usage. |

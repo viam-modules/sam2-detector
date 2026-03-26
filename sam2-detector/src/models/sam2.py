@@ -88,7 +88,7 @@ class Sam2(Vision, EasyResource):
     _device: str = "cpu"
     _initial_point: Optional[Tuple[int, int]] = None
     _label: str = "object"
-    _model_name: str = "facebook/sam2.1-hiera-large"
+    _model_name: str = "facebook/sam2.1-hiera-tiny"
     _max_frames: int = DEFAULT_MAX_FRAMES
 
     # Sliding window of frames stored as numbered JPEGs in a temp dir.
