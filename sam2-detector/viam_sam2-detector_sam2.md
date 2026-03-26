@@ -8,6 +8,7 @@ Frames arrive one at a time via `get_detections`. Each frame is buffered and per
 
 ```json
 {
+  "camera_name": "my-camera",
   "initial_point_x": 600,
   "initial_point_y": 300,
   "model_name": "facebook/sam2.1-hiera-tiny",
