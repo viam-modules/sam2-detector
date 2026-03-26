@@ -21,6 +21,7 @@ Frames arrive one at a time via `get_detections`. Each frame is buffered and per
 
 | Name | Type | Inclusion | Description |
 |---|---|---|---|
+| `camera_name` | string | **Required** | Camera to use for `get_detections_from_camera`. Added as a required dependency. |
 | `initial_point_x` | int | **Required** | X pixel coordinate of the object to track in the first frame |
 | `initial_point_y` | int | **Required** | Y pixel coordinate of the object to track in the first frame |
 | `model_name` | string | Optional | HuggingFace model ID. Default: `facebook/sam2.1-hiera-tiny`. Options: `facebook/sam2.1-hiera-tiny` (149MB), `facebook/sam2.1-hiera-small` (176MB), `facebook/sam2.1-hiera-base-plus` (309MB), `facebook/sam2.1-hiera-large` (856MB) |
@@ -32,6 +33,7 @@ Frames arrive one at a time via `get_detections`. Each frame is buffered and per
 
 ```json
 {
+  "camera_name": "my-camera",
   "initial_point_x": 600,
   "initial_point_y": 300,
   "label": "glass"

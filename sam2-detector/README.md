@@ -17,6 +17,7 @@ A Viam vision service module that uses Meta's [SAM2](https://github.com/facebook
 
 ```json
 {
+  "camera_name": "my-camera",
   "initial_point_x": 600,
   "initial_point_y": 300,
   "model_name": "facebook/sam2.1-hiera-tiny",
@@ -28,6 +29,7 @@ A Viam vision service module that uses Meta's [SAM2](https://github.com/facebook
 
 | Attribute | Type | Required | Default | Description |
 |---|---|---|---|---|
+| `camera_name` | string | yes | - | Camera to use for `get_detections_from_camera`. Added as a required dependency. |
 | `initial_point_x` | int | yes | - | X pixel coordinate of the object to track in the first frame |
 | `initial_point_y` | int | yes | - | Y pixel coordinate of the object to track in the first frame |
 | `model_name` | string | no | `facebook/sam2.1-hiera-tiny` | HuggingFace model ID. Options: `facebook/sam2.1-hiera-small`, `facebook/sam2.1-hiera-tiny` |

@@ -90,6 +90,8 @@ class Sam2(Vision, EasyResource):
     _label: str = "object"
     _model_name: str = "facebook/sam2.1-hiera-tiny"
     _max_frames: int = DEFAULT_MAX_FRAMES
+    _camera_name: str = ""
+    _camera: Optional[ResourceBase] = None
 
     # Sliding window of frames stored as numbered JPEGs in a temp dir.
     # Only the most recent _max_frames are kept.
@@ -116,6 +118,10 @@ class Sam2(Vision, EasyResource):
         instance._window_start = 0
         instance._frames_since_propagation = 0
         attrs = config.attributes.fields
+
+        instance._camera_name = attrs["camera_name"].string_value
+        from viam.components.camera import Camera
+        instance._camera = dependencies[Camera.get_resource_name(instance._camera_name)]
 
         if "initial_point_x" in attrs and "initial_point_y" in attrs:
             instance._initial_point = (
@@ -150,11 +156,19 @@ class Sam2(Vision, EasyResource):
         cls, config: ComponentConfig
     ) -> Tuple[Sequence[str], Sequence[str]]:
         attrs = config.attributes.fields
+        if "camera_name" not in attrs or not attrs["camera_name"].string_value:
+            raise ValueError("camera_name is required")
         has_x = "initial_point_x" in attrs
         has_y = "initial_point_y" in attrs
         if has_x != has_y:
             raise ValueError("Must provide both initial_point_x and initial_point_y, or neither")
-        return [], []
+        return [attrs["camera_name"].string_value], []
+
+    async def _get_camera_image(self) -> np.ndarray:
+        """Fetch an image from the configured camera dependency."""
+        images, _ = await self._camera.get_images()
+        viam_img = images[0]
+        return _viam_image_to_numpy(viam_img)
 
     def _save_frame(self, image_np: np.ndarray) -> int:
         """Save a frame as a numbered JPEG and maintain the sliding window."""
@@ -264,9 +278,20 @@ class Sam2(Vision, EasyResource):
         extra: Optional[Mapping[str, ValueTypes]] = None,
         timeout: Optional[float] = None,
     ) -> List[Detection]:
-        raise NotImplementedError(
-            "get_detections_from_camera not implemented; use get_detections"
-        )
+        image_np = await self._get_camera_image()
+
+        with self._lock:
+            frame_idx = self._save_frame(image_np)
+
+            if self._frames_since_propagation >= self._propagation_interval:
+                self._run_propagation()
+
+            det = self._detections.get(frame_idx)
+            if det is not None:
+                return [det]
+            if self._last_detection is not None:
+                return [self._last_detection]
+            return []
 
     async def capture_all_from_camera(
         self,
@@ -279,9 +304,12 @@ class Sam2(Vision, EasyResource):
         extra: Optional[Mapping[str, ValueTypes]] = None,
         timeout: Optional[float] = None,
     ) -> CaptureAllResult:
-        raise NotImplementedError(
-            "capture_all_from_camera not implemented; use get_detections"
-        )
+        detections = None
+        if return_detections:
+            detections = await self.get_detections_from_camera(
+                camera_name, extra=extra, timeout=timeout
+            )
+        return CaptureAllResult(detections=detections)
 
     async def get_classifications_from_camera(
         self,
