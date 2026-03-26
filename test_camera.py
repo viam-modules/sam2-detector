@@ -35,7 +35,7 @@ if os.path.exists(env_path):
 
 ROBOT_ADDRESS = os.environ.get("VIAM_ROBOT_ADDRESS", "computer-demo-main.496koy7yd1.viam.cloud")
 CAMERA_NAME = os.environ.get("VIAM_CAMERA_NAME", "camera-image-dir")
-MODEL_NAME = "facebook/sam2.1-hiera-large"
+MODEL_NAME = os.environ.get("SAM2_MODEL", "facebook/sam2.1-hiera-large")
 NUM_FRAMES = 50
 INITIAL_POINT = (600, 300)
 RAW_DIR = "test_raw_frames"

@@ -1,6 +1,7 @@
 import io
 import os
 import shutil
+import sys
 import tempfile
 import threading
 from typing import ClassVar, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -8,6 +9,7 @@ from typing import ClassVar, Dict, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import torch
 from PIL import Image as PILImage
+from sam2.build_sam import build_sam2_video_predictor, HF_MODEL_ID_TO_FILENAMES
 from sam2.sam2_video_predictor import SAM2VideoPredictor
 from typing_extensions import Self
 from viam.media.video import ViamImage
@@ -31,6 +33,38 @@ def _select_device() -> str:
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return "mps"
     return "cpu"
+
+
+def _find_bundled_checkpoint(model_name: str) -> Optional[Tuple[str, str]]:
+    """Check if a checkpoint is bundled alongside the module binary."""
+    if model_name not in HF_MODEL_ID_TO_FILENAMES:
+        return None
+    config_name, ckpt_filename = HF_MODEL_ID_TO_FILENAMES[model_name]
+    # Look relative to this file, then relative to the executable.
+    search_dirs = [
+        os.path.dirname(os.path.abspath(__file__)),  # src/models/
+        os.path.dirname(os.path.abspath(__file__)) + "/../..",  # sam2-detector/
+        os.getcwd(),
+    ]
+    # Also check for a BUNDLE_DIR env var (set by PyInstaller via --runtime-tmpdir or similar).
+    if hasattr(sys, "_MEIPASS"):
+        search_dirs.insert(0, sys._MEIPASS)
+    for d in search_dirs:
+        path = os.path.join(d, "checkpoints", ckpt_filename)
+        if os.path.isfile(path):
+            return config_name, path
+    return None
+
+
+def _load_predictor(model_name: str, device: str, logger) -> SAM2VideoPredictor:
+    """Load SAM2 VideoPredictor, preferring a bundled checkpoint over HuggingFace download."""
+    bundled = _find_bundled_checkpoint(model_name)
+    if bundled is not None:
+        config_name, ckpt_path = bundled
+        logger.info(f"Loading from bundled checkpoint: {ckpt_path}")
+        return build_sam2_video_predictor(config_name, ckpt_path, device=device)
+    logger.info(f"No bundled checkpoint found, downloading from HuggingFace: {model_name}")
+    return SAM2VideoPredictor.from_pretrained(model_name, device=device)
 
 
 def _mask_to_bbox(mask: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
@@ -107,9 +141,7 @@ class Sam2(Vision, EasyResource):
 
         instance._device = _select_device()
         instance.logger.info(f"Loading SAM2 model {instance._model_name} on {instance._device}")
-        instance._predictor = SAM2VideoPredictor.from_pretrained(
-            instance._model_name, device=instance._device
-        )
+        instance._predictor = _load_predictor(instance._model_name, instance._device, instance.logger)
         instance.logger.info("SAM2 model loaded")
         return instance
 
