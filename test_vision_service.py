@@ -9,6 +9,7 @@ Usage:
 import asyncio
 import io
 import os
+import subprocess
 import time
 
 import numpy as np
@@ -92,8 +93,24 @@ async def main():
                   f"dets: {len(dets)}  total_detected: {detected_count}/{i + 1}")
 
     await robot.close()
+
+    # Build video from annotated frames.
+    video_path = "test_vision_tracked.mp4"
+    print(f"Building video: {video_path}")
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-framerate", "5",
+            "-i", f"{OUTPUT_DIR}/%d.jpeg",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            video_path,
+        ],
+        capture_output=True,
+    )
+
     print(f"\nDone! {detected_count}/{NUM_FRAMES} frames with detections")
     print(f"Annotated frames saved to {OUTPUT_DIR}/")
+    print(f"Video saved to {video_path}")
 
 
 if __name__ == "__main__":
