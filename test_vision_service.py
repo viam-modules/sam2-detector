@@ -59,11 +59,16 @@ async def main():
     detected_count = 0
     for i in range(NUM_FRAMES):
         t0 = time.time()
-        result = await vision.capture_all_from_camera(
-            "camera-image-dir",
-            return_image=True,
-            return_detections=True,
-        )
+        try:
+            result = await vision.capture_all_from_camera(
+                "",  # use the default camera configured on the module
+                return_image=True,
+                return_detections=True,
+                timeout=60,  # first call may take a while (model loading + propagation)
+            )
+        except Exception as e:
+            print(f"  Frame {i}: ERROR - {e}")
+            continue
         elapsed_ms = (time.time() - t0) * 1000
 
         # Save the image with detection overlay.
