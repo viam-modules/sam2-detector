@@ -69,10 +69,11 @@ DEFAULT_MAX_FRAMES = 300
 def _select_device() -> str:
     # For AMD GPUs not yet in PyTorch's official ROCm support list,
     # HSA_OVERRIDE_GFX_VERSION tells the runtime to treat them as compatible.
+    # Can be overridden via environment variable if a different version is needed.
     if not torch.cuda.is_available() and os.path.exists("/opt/rocm"):
-        os.environ.setdefault("HSA_OVERRIDE_GFX_VERSION", "11.0.0")
-        LOGGER.info("Set HSA_OVERRIDE_GFX_VERSION=11.0.0 for AMD GPU compatibility")
-        # Re-check after setting the env var.
+        gfx_ver = os.environ.get("HSA_OVERRIDE_GFX_VERSION", "10.3.0")
+        os.environ["HSA_OVERRIDE_GFX_VERSION"] = gfx_ver
+        LOGGER.info(f"Set HSA_OVERRIDE_GFX_VERSION={gfx_ver} for AMD GPU compatibility")
         torch.cuda.init()
     if torch.cuda.is_available():
         device_name = torch.cuda.get_device_name(0)
