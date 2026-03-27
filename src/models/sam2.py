@@ -421,6 +421,13 @@ class Sam2(Vision, EasyResource):
             object_point_clouds_supported=False,
         )
 
+    async def close(self):
+        """Clean up temp files on shutdown."""
+        if self._frame_dir and os.path.isdir(self._frame_dir):
+            shutil.rmtree(self._frame_dir, ignore_errors=True)
+            LOGGER.info(f"Cleaned up frame directory: {self._frame_dir}")
+        self._frame_dir = None
+
     async def do_command(
         self,
         command: Mapping[str, ValueTypes],
