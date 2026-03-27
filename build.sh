@@ -7,17 +7,18 @@ SAM2_MODEL="${SAM2_MODEL:-facebook/sam2.1-hiera-tiny}"
 # Ensure dependencies are installed (also installs uv if needed).
 ./setup.sh
 
-# After setup.sh, uv is guaranteed to be available.
-export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+# Use the venv python directly — NOT uv run, which re-syncs and can
+# overwrite ROCm torch with the standard PyPI version.
+PYTHON=".venv/bin/python"
 
 # Build PyInstaller binary using spec file (includes runtime hooks).
-uv run pyinstaller --clean main.spec
+$PYTHON -m PyInstaller --clean main.spec
 
 # Download the model checkpoint.
-CKPT_NAME=$(uv run python -c \
+CKPT_NAME=$($PYTHON -c \
     "from sam2.build_sam import HF_MODEL_ID_TO_FILENAMES; print(HF_MODEL_ID_TO_FILENAMES['${SAM2_MODEL}'][1])")
 mkdir -p checkpoints
-uv run python -c \
+$PYTHON -c \
     "from huggingface_hub import hf_hub_download; import shutil; path = hf_hub_download('${SAM2_MODEL}', '${CKPT_NAME}'); shutil.copy(path, 'checkpoints/${CKPT_NAME}'); print('Downloaded checkpoints/${CKPT_NAME}')"
 
 # Package into the tarball that meta.json expects.
