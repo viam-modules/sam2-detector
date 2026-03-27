@@ -26,6 +26,6 @@ uv run python -c \
     "from huggingface_hub import hf_hub_download; import shutil; path = hf_hub_download('${SAM2_MODEL}', '${CKPT_NAME}'); shutil.copy(path, 'checkpoints/${CKPT_NAME}'); print('Downloaded checkpoints/${CKPT_NAME}')"
 
 # Package into the tarball that meta.json expects.
-tar -czvf module.tar.gz meta.json dist/main checkpoints/
+tar -czvf module.tar.gz meta.json run.sh dist/main checkpoints/
 
 echo "Built module.tar.gz"
