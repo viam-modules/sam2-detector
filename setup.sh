@@ -3,20 +3,26 @@ set -e
 cd "$(dirname "$0")"
 
 ROCM_INDEX="https://download.pytorch.org/whl/rocm6.3"
+CPU_INDEX="https://download.pytorch.org/whl/cpu"
 PYTHON_VERSION="3.11"
 
 detect_platform() {
+    # Allow explicit override via SAM2_BUILD_TARGET env var.
+    if [ -n "$SAM2_BUILD_TARGET" ]; then
+        echo "$SAM2_BUILD_TARGET"
+        return
+    fi
     OS="$(uname -s)"
     if [ "$OS" = "Linux" ]; then
         if command -v rocminfo >/dev/null 2>&1 || [ -d /opt/rocm ]; then
             echo "linux-rocm"
         else
-            echo "linux"
+            echo "linux-cpu"
         fi
     elif [ "$OS" = "Darwin" ]; then
         echo "darwin"
     else
-        echo "unknown"
+        echo "linux-cpu"
     fi
 }
 
@@ -47,22 +53,21 @@ if [ ! -d .venv ]; then
 fi
 
 # Install PyTorch FIRST with the correct platform index.
-# This must happen before other packages since sam2 depends on torch at install time.
 if [ "$PLATFORM" = "linux-rocm" ]; then
     echo "Installing PyTorch with ROCm support..."
     uv pip install torch torchvision --index-url "$ROCM_INDEX"
+elif [ "$PLATFORM" = "linux-cpu" ]; then
+    echo "Installing PyTorch (CPU only)..."
+    uv pip install torch torchvision --index-url "$CPU_INDEX"
 else
-    echo "Installing PyTorch (standard)..."
+    echo "Installing PyTorch (standard — includes MPS on macOS)..."
     uv pip install torch torchvision
 fi
 
-# Install all other dependencies. Using pip install (not uv sync) to avoid
-# re-resolving torch from PyPI, which would overwrite the ROCm version.
+# Install all other dependencies.
 echo "Installing remaining dependencies..."
 uv pip install -r requirements.txt
 
 # Verify torch version.
 TORCH_VERSION=$(.venv/bin/python -c "import torch; print(torch.__version__)" 2>/dev/null || echo "FAILED")
-echo "Torch version: $TORCH_VERSION"
-
 echo "Setup complete (platform: $PLATFORM, torch: $TORCH_VERSION)"

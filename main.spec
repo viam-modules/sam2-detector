@@ -1,15 +1,31 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 import sys
 import platform
 sys.setrecursionlimit(5000)
 
-IS_LINUX = platform.system() == 'Linux'
+# Build target: "darwin", "linux-cpu", or "linux-rocm"
+# Auto-detected from platform, or override with SAM2_BUILD_TARGET env var.
+def _detect_target():
+    override = os.environ.get('SAM2_BUILD_TARGET')
+    if override:
+        return override
+    if platform.system() == 'Darwin':
+        return 'darwin'
+    if platform.system() == 'Linux':
+        if os.path.exists('/opt/rocm'):
+            return 'linux-rocm'
+        return 'linux-cpu'
+    return 'linux-cpu'
 
-# Large ROCm/torch libraries not needed for SAM2 inference.
-EXCLUDE_BINARIES = [
-    'librocsolver.so',    # 1.6G - linear algebra solver (LAPACK)
+BUILD_TARGET = _detect_target()
+print(f'[main.spec] Build target: {BUILD_TARGET}')
+
+# Large ROCm libraries not needed for SAM2 inference.
+ROCM_EXCLUDE_BINARIES = [
+    'librocsolver.so',    # 1.6G - linear algebra solver
     'librocsparse.so',    # 1.4G - sparse matrix ops
-    'librccl.so',         # 807M - multi-GPU communication (NCCL equivalent)
+    'librccl.so',         # 807M - multi-GPU communication
 ]
 
 a = Analysis(
@@ -28,14 +44,14 @@ a = Analysis(
     optimize=0,
 )
 
-# Filter out large unnecessary .so files on Linux.
-if IS_LINUX:
-    a.binaries = [b for b in a.binaries if b[0].split('/')[-1] not in EXCLUDE_BINARIES]
+# Filter out large unnecessary .so files for ROCm builds.
+if BUILD_TARGET == 'linux-rocm':
+    a.binaries = [b for b in a.binaries if b[0].split('/')[-1] not in ROCM_EXCLUDE_BINARIES]
 
 pyz = PYZ(a.pure)
 
-if IS_LINUX:
-    # Linux/ROCm: use onedir to avoid the 4GB single-file limit.
+if BUILD_TARGET == 'linux-rocm':
+    # ROCm: onedir to avoid 4GB single-file limit.
     exe = EXE(
         pyz,
         a.scripts,
@@ -64,7 +80,7 @@ if IS_LINUX:
         name='main',
     )
 else:
-    # macOS: use onefile (small enough).
+    # macOS and Linux CPU: onefile (small enough).
     exe = EXE(
         pyz,
         a.scripts,
