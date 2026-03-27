@@ -68,9 +68,13 @@ DEFAULT_MAX_FRAMES = 300
 
 def _select_device() -> str:
     if torch.cuda.is_available():
+        device_name = torch.cuda.get_device_name(0)
+        LOGGER.info(f"Using CUDA GPU: {device_name}")
         return "cuda"
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        LOGGER.info("Using Apple MPS (Metal Performance Shaders)")
         return "mps"
+    LOGGER.info("No GPU detected, using CPU")
     return "cpu"
 
 
