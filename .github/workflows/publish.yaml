@@ -28,16 +28,10 @@ jobs:
           # macOS Apple Silicon — onefile, standard torch (MPS)
           - platform: darwin/arm64
             build_target: darwin
-            tags: ""
           # Linux CPU — onefile, CPU-only torch
           - platform: linux/amd64
             build_target: linux-cpu
-            tags: ""
-          # Linux ROCm — onedir, ROCm torch for AMD GPUs
-          - platform: linux/amd64
-            build_target: linux-rocm
-            tags: "rocm:true"
-    name: "Build ${{ matrix.build_target }}"
+    name: "Build (${{ matrix.build_target }})"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -52,6 +46,5 @@ jobs:
           key-value: ${{ secrets.viam_key_value }}
           token: ${{ github.token }}
           platform: ${{ matrix.platform }}
-          tags: ${{ matrix.tags }}
         env:
           SAM2_BUILD_TARGET: ${{ matrix.build_target }}
