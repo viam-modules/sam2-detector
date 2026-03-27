@@ -4,15 +4,12 @@ sys.setrecursionlimit(5000)
 
 # Large ROCm/torch libraries not needed for SAM2 inference.
 # This reduces the bundle from ~7GB to ~2GB.
+# Large ROCm/torch libraries not needed for SAM2 inference.
+# Only exclude libraries that are NOT linked at torch import time.
 EXCLUDE_BINARIES = [
-    'librocsolver.so',    # 1.6G - linear algebra solver
+    'librocsolver.so',    # 1.6G - linear algebra solver (LAPACK)
     'librocsparse.so',    # 1.4G - sparse matrix ops
-    'libmagma.so',        # 951M - GPU linear algebra
-    'librccl.so',         # 807M - multi-GPU communication
-    'librocrand.so',      # 198M - random number generation
-    'librocfft.so',       # 12M  - FFT
-    'libhipblaslt.so',    # 7M   - BLAS extensions
-    'libhipsparselt.so',  # 6M   - sparse BLAS
+    'librccl.so',         # 807M - multi-GPU communication (NCCL equivalent)
 ]
 
 a = Analysis(
