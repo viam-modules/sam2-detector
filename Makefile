@@ -14,7 +14,7 @@
 .PHONY: clean module
 
 clean:
-	rm -rf dist/ build/ checkpoints/
+	rm -rf dist/ build/
 	rm -f module.tar.gz
 
 module:
