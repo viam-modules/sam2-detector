@@ -10,13 +10,8 @@ SAM2_MODEL="${SAM2_MODEL:-facebook/sam2.1-hiera-tiny}"
 # After setup.sh, uv is guaranteed to be available.
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
-# Build PyInstaller binary.
-uv run pyinstaller \
-    --onefile \
-    --hidden-import="googleapiclient" \
-    --hidden-import="viam" \
-    --hidden-import="sam2" \
-    src/main.py
+# Build PyInstaller binary using spec file (includes runtime hooks).
+uv run pyinstaller --clean main.spec
 
 # Download the model checkpoint.
 CKPT_NAME=$(uv run python -c \
