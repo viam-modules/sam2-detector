@@ -28,7 +28,7 @@ if os.path.exists(env_path):
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k.strip(), v.strip())
 
-ROBOT_ADDRESS = os.environ.get("VIAM_ROBOT_ADDRESS", "computer-demo-main.496koy7yd1.viam.cloud")
+ROBOT_ADDRESS = os.environ.get("VIAM_ROBOT_ADDRESS", "vino2-main.kssbd6djf3.viam.cloud")
 VISION_SERVICE_NAME = os.environ.get("VIAM_VISION_SERVICE", "vision-sam2")
 NUM_FRAMES = 150
 OUTPUT_DIR = "test_vision_output"
