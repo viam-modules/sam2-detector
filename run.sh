@@ -12,6 +12,12 @@ if [ -d /opt/rocm ] && [ -z "$HSA_OVERRIDE_GFX_VERSION" ]; then
 fi
 
 echo "[run.sh] HSA_OVERRIDE_GFX_VERSION after: ${HSA_OVERRIDE_GFX_VERSION:-NOT SET}" >&2
-echo "[run.sh] launching: $SCRIPT_DIR/dist/main $@" >&2
 
-exec "$SCRIPT_DIR/dist/main" "$@"
+# Support both onefile (macOS: dist/main) and onedir (Linux: dist/main/main).
+if [ -f "$SCRIPT_DIR/dist/main/main" ]; then
+    echo "[run.sh] launching (onedir): $SCRIPT_DIR/dist/main/main $@" >&2
+    exec "$SCRIPT_DIR/dist/main/main" "$@"
+else
+    echo "[run.sh] launching (onefile): $SCRIPT_DIR/dist/main $@" >&2
+    exec "$SCRIPT_DIR/dist/main" "$@"
+fi
