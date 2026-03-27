@@ -2,9 +2,8 @@
 set -e
 cd "$(dirname "$0")"
 
-# Platform-specific PyTorch index.
-# Linux with AMD GPU uses ROCm, everything else uses default PyPI.
 ROCM_INDEX="https://download.pytorch.org/whl/rocm6.3"
+PYTHON_VERSION="3.11"
 
 detect_platform() {
     OS="$(uname -s)"
@@ -21,7 +20,6 @@ detect_platform() {
     fi
 }
 
-# Install uv if not already available.
 ensure_uv() {
     if command -v uv >/dev/null 2>&1; then
         echo "uv found: $(uv --version)"
@@ -42,13 +40,14 @@ echo "Detected platform: $PLATFORM"
 
 ensure_uv
 
-# Create venv and install project dependencies from pyproject.toml.
-# (torch/torchvision are excluded from pyproject.toml — installed below.)
-uv sync
+# Create venv if it doesn't exist.
+if [ ! -d .venv ]; then
+    echo "Creating virtual environment..."
+    uv venv --python "$PYTHON_VERSION"
+fi
 
-# Install PyTorch with the correct index for the platform.
-# Done after uv sync so the venv exists, and won't be overwritten since
-# torch is not in pyproject.toml.
+# Install PyTorch FIRST with the correct platform index.
+# This must happen before other packages since sam2 depends on torch at install time.
 if [ "$PLATFORM" = "linux-rocm" ]; then
     echo "Installing PyTorch with ROCm support..."
     uv pip install torch torchvision --index-url "$ROCM_INDEX"
@@ -57,4 +56,13 @@ else
     uv pip install torch torchvision
 fi
 
-echo "Setup complete."
+# Install all other dependencies. Using pip install (not uv sync) to avoid
+# re-resolving torch from PyPI, which would overwrite the ROCm version.
+echo "Installing remaining dependencies..."
+uv pip install -r requirements.txt
+
+# Verify torch version.
+TORCH_VERSION=$(.venv/bin/python -c "import torch; print(torch.__version__)" 2>/dev/null || echo "FAILED")
+echo "Torch version: $TORCH_VERSION"
+
+echo "Setup complete (platform: $PLATFORM, torch: $TORCH_VERSION)"

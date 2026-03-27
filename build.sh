@@ -4,14 +4,17 @@ cd "$(dirname "$0")"
 
 SAM2_MODEL="${SAM2_MODEL:-facebook/sam2.1-hiera-tiny}"
 
-# Ensure dependencies are installed (also installs uv if needed).
+# Ensure dependencies are installed (creates venv, installs correct torch).
 ./setup.sh
 
-# Use the venv python directly — NOT uv run, which re-syncs and can
-# overwrite ROCm torch with the standard PyPI version.
+# Use the venv python directly — never uv run/uv sync, which would
+# re-resolve torch from PyPI and overwrite the ROCm version.
 PYTHON=".venv/bin/python"
 
-# Build PyInstaller binary using spec file (includes runtime hooks).
+# Verify torch is the right version before building.
+echo "Bundling torch version: $($PYTHON -c 'import torch; print(torch.__version__)')"
+
+# Build PyInstaller binary using spec file (includes runtime hooks for ROCm).
 $PYTHON -m PyInstaller --clean main.spec
 
 # Download the model checkpoint.
