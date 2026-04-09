@@ -6,6 +6,7 @@ Pipeline: detector bbox → SAM2 mask → depth projection → PointCloudObject
 """
 
 import io
+import math
 import struct
 import threading
 from typing import ClassVar, List, Mapping, Optional, Sequence, Tuple
@@ -17,6 +18,8 @@ from typing_extensions import Self
 from viam.components.camera import Camera
 from viam.logging import getLogger
 from viam.media.video import ViamImage
+from viam.robot.client import RobotClient
+from viam.rpc.dial import DialOptions
 from viam.proto.app.robot import ComponentConfig
 from viam.proto.common import (
     Geometry,
@@ -41,6 +44,72 @@ from models.sam2 import _select_device, _find_bundled_checkpoint, _viam_image_to
 LOGGER = getLogger(__name__)
 
 
+def _ov_to_rotation_matrix(o_x: float, o_y: float, o_z: float, theta: float) -> np.ndarray:
+    """Convert Viam's OrientationVector to a 3x3 rotation matrix.
+
+    (o_x, o_y, o_z) is a point on the unit sphere indicating the Z-axis direction.
+    theta is rotation around that axis (radians).
+
+    Conversion: OV → spherical (lon, lat) → ZYZ Euler angles → quaternion → rotation matrix.
+    See: github.com/viamrobotics/rdk/blob/main/spatialmath/orientationVector.go
+    """
+    # Normalize the orientation vector.
+    norm = math.sqrt(o_x * o_x + o_y * o_y + o_z * o_z)
+    if norm < 1e-10:
+        return np.eye(3)
+    o_x, o_y, o_z = o_x / norm, o_y / norm, o_z / norm
+
+    # Convert to spherical coordinates.
+    lat = math.acos(max(-1.0, min(1.0, o_z)))  # 0 at north pole, pi at south
+
+    if abs(1.0 - abs(o_z)) > 1e-4:  # not at a pole
+        lon = math.atan2(o_y, o_x)
+    else:
+        lon = 0.0
+
+    # ZYZ Euler angles to quaternion.
+    # q = Rz(lon) * Ry(lat) * Rz(theta)
+    c1, s1 = math.cos(lon / 2), math.sin(lon / 2)
+    c2, s2 = math.cos(lat / 2), math.sin(lat / 2)
+    c3, s3 = math.cos(theta / 2), math.sin(theta / 2)
+
+    w = c1 * c2 * c3 - s1 * c2 * s3
+    x = c1 * s2 * s3 - s1 * s2 * c3
+    y = c1 * s2 * c3 + s1 * s2 * s3
+    z = s1 * c2 * c3 + c1 * c2 * s3
+
+    # Quaternion to rotation matrix.
+    return np.array([
+        [1 - 2*(y*y + z*z),  2*(x*y + w*z),      2*(x*z - w*y)],
+        [2*(x*y - w*z),      1 - 2*(x*x + z*z),  2*(y*z + w*x)],
+        [2*(x*z + w*y),      2*(y*z - w*x),      1 - 2*(x*x + y*y)],
+    ])
+
+
+async def _connect_to_machine() -> Optional[RobotClient]:
+    """Connect to the parent machine using env vars set by viam-server.
+    Returns None if env vars are not set (e.g. running standalone)."""
+    import os as _os
+    host = _os.environ.get("VIAM_MACHINE_FQDN", "")
+    api_key_id = _os.environ.get("VIAM_API_KEY_ID", "")
+    api_key = _os.environ.get("VIAM_API_KEY", "")
+    if not host or not api_key_id or not api_key:
+        LOGGER.warn("Machine connection env vars not set, frame transforms unavailable")
+        return None
+    try:
+        client = await RobotClient.at_address(
+            host,
+            RobotClient.Options(
+                dial_options=DialOptions.with_api_key(api_key=api_key, api_key_id=api_key_id),
+            ),
+        )
+        LOGGER.info(f"Connected to machine at {host} for frame transforms")
+        return client
+    except Exception as e:
+        LOGGER.warn(f"Could not connect to machine for frame transforms: {e}")
+        return None
+
+
 def _load_image_predictor(model_name: str, device: str) -> SAM2ImagePredictor:
     """Load SAM2 ImagePredictor, preferring a bundled checkpoint."""
     bundled = _find_bundled_checkpoint(model_name)
@@ -57,23 +126,24 @@ def _load_image_predictor(model_name: str, device: str) -> SAM2ImagePredictor:
 def _depth_image_to_numpy(image: ViamImage) -> np.ndarray:
     """Convert a Viam depth image to a numpy array (H, W) of depth in mm."""
     mime = getattr(image, "mime_type", "")
+    data = image.data
+    LOGGER.debug(f"Depth image: mime={mime}, data_len={len(data)}, first_bytes={data[:24].hex() if len(data) >= 24 else data.hex()}")
+
     if "viam" in str(mime) and "dep" in str(mime):
-        # Viam raw depth format: 24-byte header + big-endian uint16 pixels.
-        data = image.data
-        # Header: 8 bytes magic, 8 bytes width, 8 bytes height (all big-endian uint64).
-        width = int.from_bytes(data[8:16], "big")
-        height = int.from_bytes(data[16:24], "big")
-        pixels = np.frombuffer(data[24:], dtype=">u2").astype(np.float64)
-        return pixels.reshape((height, width))
+        # Viam raw depth format uses bytes_to_depth_array from the SDK.
+        depth_list = image.bytes_to_depth_array()
+        return np.array(depth_list, dtype=np.float64)
     else:
         # PNG or other format: decode as 16-bit grayscale.
-        pil = PILImage.open(io.BytesIO(image.data))
+        pil = PILImage.open(io.BytesIO(data))
+        LOGGER.debug(f"Depth PIL: mode={pil.mode}, size={pil.size}")
         return np.array(pil, dtype=np.float64)
 
 
-def _encode_pcd_binary(points: np.ndarray, colors: np.ndarray) -> bytes:
-    """Encode points (N,3) float64 and colors (N,3) uint8 as binary PCD."""
-    n = len(points)
+def _encode_pcd_binary(points_mm: np.ndarray, colors: np.ndarray) -> bytes:
+    """Encode points (N,3) in mm and colors (N,3) uint8 as binary PCD.
+    PCD coordinates are in meters (Viam convention)."""
+    n = len(points_mm)
     if n == 0:
         return b""
 
@@ -90,10 +160,13 @@ def _encode_pcd_binary(points: np.ndarray, colors: np.ndarray) -> bytes:
         f"DATA binary\n"
     ).encode("ascii")
 
+    # Convert mm to meters for PCD output.
+    points_m = points_mm / 1000.0
+
     # Pack points + RGB into binary.
     buf = bytearray(n * 16)  # 4 floats * 4 bytes each
     for i in range(n):
-        x, y, z = points[i]
+        x, y, z = points_m[i]
         r, g, b = int(colors[i, 0]), int(colors[i, 1]), int(colors[i, 2])
         rgb_int = (r << 16) | (g << 8) | b
         rgb_float = struct.unpack("f", struct.pack("I", rgb_int))[0]
@@ -118,6 +191,7 @@ class Sam2Segments(Vision, EasyResource):
     _model_name: str = "facebook/sam2.1-hiera-tiny"
     _depth_threshold_mm: int = 0
     _min_points: int = 50
+    _robot_client: Optional[RobotClient] = None
     _lock: threading.Lock
 
     @classmethod
@@ -151,6 +225,9 @@ class Sam2Segments(Vision, EasyResource):
         LOGGER.info(f"Loading SAM2 ImagePredictor ({instance._model_name}) on {instance._device}")
         instance._predictor = _load_image_predictor(instance._model_name, instance._device)
         LOGGER.info("SAM2 ImagePredictor loaded")
+
+        # Connect to the machine for frame transforms (async, done lazily on first use).
+        instance._robot_client = None
 
         return instance
 
@@ -251,12 +328,12 @@ class Sam2Segments(Vision, EasyResource):
         return points, colors
 
     def _build_point_cloud_object(
-        self, points: np.ndarray, colors: np.ndarray, label: str
+        self, points: np.ndarray, colors: np.ndarray, label: str, ref_frame: str = ""
     ) -> PointCloudObject:
-        """Create a PointCloudObject from 3D points and colors."""
+        """Create a PointCloudObject from 3D points (mm) and colors."""
         pcd_bytes = _encode_pcd_binary(points, colors)
 
-        # Compute bounding box geometry.
+        # Compute bounding box geometry (in mm).
         mins = points.min(axis=0)
         maxs = points.max(axis=0)
         center = (mins + maxs) / 2.0
@@ -276,36 +353,42 @@ class Sam2Segments(Vision, EasyResource):
         return PointCloudObject(
             point_cloud=pcd_bytes,
             geometries=GeometriesInFrame(
-                reference_frame=self._camera_name,
+                reference_frame=ref_frame,
                 geometries=[geometry],
             ),
         )
 
-    async def _transform_points_to_world(
-        self, points: np.ndarray, robot_client
-    ) -> np.ndarray:
-        """Transform points from camera frame to world frame using the frame system."""
+    async def _ensure_robot_client(self):
+        """Lazily connect to the parent machine for frame transforms."""
+        if self._robot_client is None:
+            self._robot_client = await _connect_to_machine()
+        return self._robot_client
+
+    async def _transform_points_to_world(self, points_mm: np.ndarray) -> Tuple[np.ndarray, str]:
+        """Transform points from camera frame to world frame.
+        Points are in mm. Returns (points_mm, reference_frame)."""
+        client = await self._ensure_robot_client()
+        if client is None:
+            return points_mm, self._camera_name
+
         try:
-            # Get the camera-to-world transform via transform_pose.
-            origin_in_camera = PoseInFrame(
+            origin = PoseInFrame(
                 reference_frame=self._camera_name,
                 pose=Pose(x=0, y=0, z=0, o_x=0, o_y=0, o_z=1, theta=0),
             )
-            world_pose = await robot_client.transform_pose(origin_in_camera, "world")
-            p = world_pose.pose
+            world_pose_in_frame = await client.transform_pose(origin, "world")
+            p = world_pose_in_frame.pose
 
-            # Extract translation.
-            translation = np.array([p.x, p.y, p.z])
+            t = np.array([p.x, p.y, p.z])
+            R = _ov_to_rotation_matrix(p.o_x, p.o_y, p.o_z, p.theta)
 
-            # Extract rotation from orientation vector + theta.
-            # For simplicity, if the pose is identity-ish, just apply translation.
-            # Full quaternion rotation would require more complex math.
-            # TODO: implement full rotation if needed.
-            return points + translation
+            transformed = (R @ points_mm.T).T + t
+            LOGGER.debug(f"Transformed {len(points_mm)} points to world frame, t=({t[0]:.0f},{t[1]:.0f},{t[2]:.0f})")
+            return transformed, "world"
 
         except Exception as e:
-            LOGGER.warn(f"Could not transform to world frame, returning camera frame: {e}")
-            return points
+            LOGGER.warn(f"Could not transform to world frame: {e}")
+            return points_mm, self._camera_name
 
     # ---- Vision service API ----
 
@@ -353,7 +436,16 @@ class Sam2Segments(Vision, EasyResource):
                 continue
 
             label = det.class_name or self._label or "object"
-            pco = self._build_point_cloud_object(points, colors, label)
+
+            # Transform to world frame if possible.
+            points, ref_frame = await self._transform_points_to_world(points)
+
+            LOGGER.debug(
+                f"Segment '{label}': {len(points)} points in {ref_frame}, "
+                f"center=({points.mean(axis=0)[0]:.0f},{points.mean(axis=0)[1]:.0f},{points.mean(axis=0)[2]:.0f})mm"
+            )
+
+            pco = self._build_point_cloud_object(points, colors, label, ref_frame)
             results.append(pco)
 
         LOGGER.info(f"Returning {len(results)} point cloud objects")
@@ -434,7 +526,10 @@ class Sam2Segments(Vision, EasyResource):
         )
 
     async def close(self):
-        LOGGER.info("Sam2Segments shutting down")
+        if self._robot_client is not None:
+            await self._robot_client.close()
+            self._robot_client = None
+        LOGGER.info("Sam2Segments shut down")
 
     async def do_command(
         self,
