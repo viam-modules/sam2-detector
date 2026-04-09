@@ -58,13 +58,13 @@ def _depth_image_to_numpy(image: ViamImage) -> np.ndarray:
     """Convert a Viam depth image to a numpy array (H, W) of depth in mm."""
     mime = getattr(image, "mime_type", "")
     if "viam" in str(mime) and "dep" in str(mime):
-        # Viam raw depth format: 24-byte header + uint16 LE pixels.
+        # Viam raw depth format: 24-byte header + big-endian uint16 pixels.
         data = image.data
-        # Header: 8 bytes magic, 8 bytes width, 8 bytes height (all little-endian uint64).
-        width = int.from_bytes(data[8:16], "little")
-        height = int.from_bytes(data[16:24], "little")
-        pixels = np.frombuffer(data[24:], dtype=np.uint16).reshape((height, width))
-        return pixels.astype(np.float64)
+        # Header: 8 bytes magic, 8 bytes width, 8 bytes height (all big-endian uint64).
+        width = int.from_bytes(data[8:16], "big")
+        height = int.from_bytes(data[16:24], "big")
+        pixels = np.frombuffer(data[24:], dtype=">u2").astype(np.float64)
+        return pixels.reshape((height, width))
     else:
         # PNG or other format: decode as 16-bit grayscale.
         pil = PILImage.open(io.BytesIO(image.data))
