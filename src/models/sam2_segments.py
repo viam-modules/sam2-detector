@@ -39,7 +39,7 @@ from viam.services.vision import *
 from viam.utils import ValueTypes
 
 # Reuse shared utilities from the sam2 module.
-from models.sam2 import _select_device, _find_bundled_checkpoint, _viam_image_to_numpy
+from models.sam2 import _select_device, _find_bundled_checkpoint, _viam_image_to_numpy, _mask_to_bbox
 
 LOGGER = getLogger(__name__)
 
@@ -451,6 +451,27 @@ class Sam2Segments(Vision, EasyResource):
         LOGGER.info(f"Returning {len(results)} point cloud objects")
         return results
 
+    async def _get_sam2_refined_detections(self, image: ViamImage) -> List[Detection]:
+        """Get upstream detections refined by SAM2: bounding boxes are from the mask, not the detector."""
+        color_np = _viam_image_to_numpy(image)
+        upstream = await self._get_filtered_detections(image)
+        refined = []
+        for det in upstream:
+            bbox = (det.x_min, det.y_min, det.x_max, det.y_max)
+            mask = self._sam2_refine(color_np, bbox)
+            if mask is None:
+                continue
+            mask_bbox = _mask_to_bbox(mask)
+            if mask_bbox is None:
+                continue
+            x_min, y_min, x_max, y_max = mask_bbox
+            refined.append(Detection(
+                x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max,
+                confidence=det.confidence,
+                class_name=det.class_name,
+            ))
+        return refined
+
     async def get_detections(
         self,
         image: ViamImage,
@@ -458,8 +479,8 @@ class Sam2Segments(Vision, EasyResource):
         extra: Optional[Mapping[str, ValueTypes]] = None,
         timeout: Optional[float] = None,
     ) -> List[Detection]:
-        """Pass-through: return filtered detections from upstream detector."""
-        return await self._get_filtered_detections(image)
+        """Return detections with SAM2-refined bounding boxes (mask outline, not detector bbox)."""
+        return await self._get_sam2_refined_detections(image)
 
     async def get_detections_from_camera(
         self,
@@ -468,11 +489,11 @@ class Sam2Segments(Vision, EasyResource):
         extra: Optional[Mapping[str, ValueTypes]] = None,
         timeout: Optional[float] = None,
     ) -> List[Detection]:
-        """Get detections using the configured camera."""
+        """Get SAM2-refined detections using the configured camera."""
         images, _ = await self._camera.get_images()
         if not images:
             return []
-        return await self._get_filtered_detections(images[0])
+        return await self._get_sam2_refined_detections(images[0])
 
     async def capture_all_from_camera(
         self,
@@ -499,7 +520,7 @@ class Sam2Segments(Vision, EasyResource):
             result.image = images[0]
 
         if return_detections:
-            result.detections = await self._get_filtered_detections(images[0])
+            result.detections = await self._get_sam2_refined_detections(images[0])
 
         if return_object_point_clouds:
             result.objects = await self.get_object_point_clouds(
