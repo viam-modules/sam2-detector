@@ -58,12 +58,14 @@ The key advantage: unlike projecting all pixels in a bounding box (which include
 ### `get_object_point_clouds(camera_name)`
 
 Returns a list of `PointCloudObject` — one for each detected and segmented object. Each contains:
-- `point_cloud`: PCD binary data (XYZRGB format)
-- `geometries`: bounding box geometry with label, in the camera reference frame
+- `point_cloud`: PCD binary data (XYZRGB format, coordinates in meters)
+- `geometries`: 3D bounding box geometry with label (dimensions in mm)
+
+Point clouds are automatically transformed to the **world frame** using the machine's frame system. The module connects to the parent machine using the `VIAM_MACHINE_FQDN`, `VIAM_API_KEY_ID`, and `VIAM_API_KEY` environment variables, which are set automatically by `viam-server`. If frame transform is unavailable (e.g. no frame system configured), points are returned in the camera's reference frame.
 
 ### `get_detections(image)` / `get_detections_from_camera(camera_name)`
 
-Pass-through to the upstream detector, filtered by the configured label and confidence threshold. This allows the module to also serve as a filtered 2D detector.
+Returns filtered detections with **SAM2-refined bounding boxes**. The upstream detector provides initial bounding boxes, SAM2 generates a precise segmentation mask, and the returned bounding box tightly surrounds the mask — not the original detector bbox.
 
 ### `capture_all_from_camera(camera_name)`
 
@@ -94,3 +96,16 @@ The camera must return both **color** and **depth** images from `get_images()`. 
 The camera must also provide **intrinsic parameters** via `get_properties()` (focal length, principal point).
 
 Intel RealSense cameras work well for this purpose.
+
+## Frame transforms
+
+Point clouds from `get_object_point_clouds` are automatically transformed from the camera frame to the **world frame** using the machine's frame system configuration.
+
+The module connects to the parent machine using environment variables set by `viam-server`:
+- `VIAM_MACHINE_FQDN` — machine address
+- `VIAM_API_KEY_ID` — API key ID
+- `VIAM_API_KEY` — API key
+
+These are set automatically — no additional configuration is needed. The module uses `transform_pose` to obtain the camera-to-world transform (rotation + translation) and applies it to all 3D points.
+
+If the frame system is not configured or the connection fails, the module logs a warning and returns point clouds in the camera's reference frame instead.

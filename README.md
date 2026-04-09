@@ -15,7 +15,7 @@ See [sam2 model documentation](viam_sam2-detector_sam2.md) for configuration det
 
 ### `viam:sam2-detector:sam2-segments` — 3D Segmentation
 
-Combines an upstream object detector with SAM2's precise segmentation and depth-based 3D projection. Instead of projecting all pixels in a bounding box to 3D (which includes background), this model uses SAM2's mask to project only object pixels, producing much cleaner point clouds.
+Combines an upstream object detector with SAM2's precise segmentation and depth-based 3D projection. Instead of projecting all pixels in a bounding box to 3D (which includes background), this model uses SAM2's mask to project only object pixels, producing much cleaner point clouds. Point clouds are automatically transformed to the world frame using the machine's frame system.
 
 See [sam2-segments model documentation](viam_sam2-detector_sam2-segments.md) for configuration details.
 
