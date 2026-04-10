@@ -44,31 +44,25 @@ from models.sam2 import _select_device, _find_bundled_checkpoint, _viam_image_to
 LOGGER = getLogger(__name__)
 
 
-def _ov_to_rotation_matrix(o_x: float, o_y: float, o_z: float, theta: float) -> np.ndarray:
-    """Convert Viam's OrientationVector to a 3x3 rotation matrix.
+def _ov_to_quaternion(o_x: float, o_y: float, o_z: float, theta_deg: float) -> Tuple[float, float, float, float]:
+    """Convert Viam's OrientationVector (from Pose proto) to a quaternion (w, x, y, z).
 
     (o_x, o_y, o_z) is a point on the unit sphere indicating the Z-axis direction.
-    theta is rotation around that axis (radians).
+    theta_deg is rotation around that axis in DEGREES (Pose proto uses degrees).
 
-    Conversion: OV → spherical (lon, lat) → ZYZ Euler angles → quaternion → rotation matrix.
-    See: github.com/viamrobotics/rdk/blob/main/spatialmath/orientationVector.go
+    Conversion: OV(degrees) → OV(radians) → spherical (lon, lat) → ZYZ Euler → quaternion.
+    Matches: rdk/spatialmath/orientationVector.go + mgl64.AnglesToQuat(ZYZ)
     """
-    # Normalize the orientation vector.
+    theta = math.radians(theta_deg)
+
     norm = math.sqrt(o_x * o_x + o_y * o_y + o_z * o_z)
     if norm < 1e-10:
-        return np.eye(3)
+        return (1.0, 0.0, 0.0, 0.0)
     o_x, o_y, o_z = o_x / norm, o_y / norm, o_z / norm
 
-    # Convert to spherical coordinates.
-    lat = math.acos(max(-1.0, min(1.0, o_z)))  # 0 at north pole, pi at south
+    lat = math.acos(max(-1.0, min(1.0, o_z)))
+    lon = math.atan2(o_y, o_x) if abs(1.0 - abs(o_z)) > 1e-4 else 0.0
 
-    if abs(1.0 - abs(o_z)) > 1e-4:  # not at a pole
-        lon = math.atan2(o_y, o_x)
-    else:
-        lon = 0.0
-
-    # ZYZ Euler angles to quaternion.
-    # q = Rz(lon) * Ry(lat) * Rz(theta)
     c1, s1 = math.cos(lon / 2), math.sin(lon / 2)
     c2, s2 = math.cos(lat / 2), math.sin(lat / 2)
     c3, s3 = math.cos(theta / 2), math.sin(theta / 2)
@@ -77,13 +71,21 @@ def _ov_to_rotation_matrix(o_x: float, o_y: float, o_z: float, theta: float) -> 
     x = c1 * s2 * s3 - s1 * s2 * c3
     y = c1 * s2 * c3 + s1 * s2 * s3
     z = s1 * c2 * c3 + c1 * c2 * s3
+    return (w, x, y, z)
 
-    # Quaternion to rotation matrix.
-    return np.array([
-        [1 - 2*(y*y + z*z),  2*(x*y + w*z),      2*(x*z - w*y)],
-        [2*(x*y - w*z),      1 - 2*(x*x + z*z),  2*(y*z + w*x)],
-        [2*(x*z + w*y),      2*(y*z - w*x),      1 - 2*(x*x + y*y)],
+
+def _quat_rotate(q: Tuple[float, float, float, float], v: np.ndarray) -> np.ndarray:
+    """Rotate a vector by a quaternion using q * (0,v) * q_conj.
+    This matches the RDK's dual quaternion Compose + Point() extraction.
+    q = (w, x, y, z), v = (N, 3) array of points. Returns (N, 3)."""
+    qw, qx, qy, qz = q
+    # Build rotation matrix from quaternion (standard formula: v' = q v q*)
+    R = np.array([
+        [1 - 2*(qy*qy + qz*qz),  2*(qx*qy - qw*qz),      2*(qx*qz + qw*qy)],
+        [2*(qx*qy + qw*qz),      1 - 2*(qx*qx + qz*qz),  2*(qy*qz - qw*qx)],
+        [2*(qx*qz - qw*qy),      2*(qy*qz + qw*qx),      1 - 2*(qx*qx + qy*qy)],
     ])
+    return (R @ v.T).T
 
 
 async def _connect_to_machine() -> Optional[RobotClient]:
@@ -396,11 +398,13 @@ class Sam2Segments(Vision, EasyResource):
             )
 
             t = np.array([p.x, p.y, p.z])
-            R = _ov_to_rotation_matrix(p.o_x, p.o_y, p.o_z, p.theta)
+            q = _ov_to_quaternion(p.o_x, p.o_y, p.o_z, p.theta)
 
-            LOGGER.debug(f"Rotation matrix:\n{np.array2string(R, precision=4)}")
+            LOGGER.debug(f"Quaternion: w={q[0]:.4f} x={q[1]:.4f} y={q[2]:.4f} z={q[3]:.4f}")
 
-            transformed = (R @ points_mm.T).T + t
+            # world_point = R(q) @ camera_point + translation
+            # This matches RDK's Compose(offset_dq, point_dq).Point()
+            transformed = _quat_rotate(q, points_mm) + t
             LOGGER.info(f"Transformed {len(points_mm)} points to world frame")
             return transformed, "world"
 
