@@ -28,10 +28,24 @@ ROCM_EXCLUDE_BINARIES = [
     'librccl.so',         # 807M - multi-GPU communication
 ]
 
+# Find the viam rust utils shared library — needed for gRPC connections.
+import viam.rpc
+_viam_rpc_dir = os.path.dirname(viam.rpc.__file__)
+_rust_lib = None
+for _ext in ('.so', '.dylib', '.dll'):
+    _candidate = os.path.join(_viam_rpc_dir, f'libviam_rust_utils{_ext}')
+    if os.path.exists(_candidate):
+        _rust_lib = _candidate
+        break
+_extra_binaries = []
+if _rust_lib:
+    print(f'[main.spec] Including Viam rust utils: {_rust_lib}')
+    _extra_binaries.append((_rust_lib, 'viam/rpc'))
+
 a = Analysis(
     ['src/main.py'],
     pathex=[],
-    binaries=[],
+    binaries=_extra_binaries,
     datas=[],
     hiddenimports=['googleapiclient', 'viam', 'sam2'],
     hookspath=[],

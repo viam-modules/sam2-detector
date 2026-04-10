@@ -93,8 +93,18 @@ async def _connect_to_machine() -> Optional[RobotClient]:
     host = _os.environ.get("VIAM_MACHINE_FQDN", "")
     api_key_id = _os.environ.get("VIAM_API_KEY_ID", "")
     api_key = _os.environ.get("VIAM_API_KEY", "")
-    if not host or not api_key_id or not api_key:
-        LOGGER.warn("Machine connection env vars not set, frame transforms unavailable")
+    missing = []
+    if not host:
+        missing.append("VIAM_MACHINE_FQDN")
+    if not api_key_id:
+        missing.append("VIAM_API_KEY_ID")
+    if not api_key:
+        missing.append("VIAM_API_KEY")
+    if missing:
+        LOGGER.info(
+            f"Frame system unavailable: missing environment variable(s): {', '.join(missing)}. "
+            f"Point clouds will be returned in camera frame instead of world frame."
+        )
         return None
     try:
         client = await RobotClient.at_address(
