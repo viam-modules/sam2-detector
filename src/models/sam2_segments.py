@@ -389,11 +389,19 @@ class Sam2Segments(Vision, EasyResource):
             world_pose_in_frame = await client.transform_pose(origin, "world")
             p = world_pose_in_frame.pose
 
+            LOGGER.info(
+                f"Frame transform {self._camera_name} -> world: "
+                f"translation=({p.x:.1f},{p.y:.1f},{p.z:.1f})mm "
+                f"OV=({p.o_x:.4f},{p.o_y:.4f},{p.o_z:.4f}) theta={p.theta:.4f}"
+            )
+
             t = np.array([p.x, p.y, p.z])
             R = _ov_to_rotation_matrix(p.o_x, p.o_y, p.o_z, p.theta)
 
+            LOGGER.debug(f"Rotation matrix:\n{np.array2string(R, precision=4)}")
+
             transformed = (R @ points_mm.T).T + t
-            LOGGER.debug(f"Transformed {len(points_mm)} points to world frame, t=({t[0]:.0f},{t[1]:.0f},{t[2]:.0f})")
+            LOGGER.info(f"Transformed {len(points_mm)} points to world frame")
             return transformed, "world"
 
         except Exception as e:
@@ -447,12 +455,18 @@ class Sam2Segments(Vision, EasyResource):
 
             label = det.class_name or self._label or "object"
 
+            cam_center = points.mean(axis=0)
+            LOGGER.info(
+                f"Segment '{label}': {len(points)} pts, "
+                f"camera frame center=({cam_center[0]:.0f},{cam_center[1]:.0f},{cam_center[2]:.0f})mm"
+            )
+
             # Transform to world frame if possible.
             points, ref_frame = await self._transform_points_to_world(points)
 
-            LOGGER.debug(
-                f"Segment '{label}': {len(points)} points in {ref_frame}, "
-                f"center=({points.mean(axis=0)[0]:.0f},{points.mean(axis=0)[1]:.0f},{points.mean(axis=0)[2]:.0f})mm"
+            world_center = points.mean(axis=0)
+            LOGGER.info(
+                f"  -> {ref_frame} frame center=({world_center[0]:.0f},{world_center[1]:.0f},{world_center[2]:.0f})mm"
             )
 
             pco = self._build_point_cloud_object(points, colors, label, ref_frame)
@@ -465,16 +479,23 @@ class Sam2Segments(Vision, EasyResource):
         """Get upstream detections refined by SAM2: bounding boxes are from the mask, not the detector."""
         color_np = _viam_image_to_numpy(image)
         upstream = await self._get_filtered_detections(image)
+        LOGGER.debug(f"Refining {len(upstream)} upstream detections with SAM2")
         refined = []
         for det in upstream:
-            bbox = (det.x_min, det.y_min, det.x_max, det.y_max)
-            mask = self._sam2_refine(color_np, bbox)
+            det_bbox = (det.x_min, det.y_min, det.x_max, det.y_max)
+            mask = self._sam2_refine(color_np, det_bbox)
             if mask is None:
+                LOGGER.debug(f"SAM2 returned empty mask for detector bbox {det_bbox}")
                 continue
             mask_bbox = _mask_to_bbox(mask)
             if mask_bbox is None:
                 continue
             x_min, y_min, x_max, y_max = mask_bbox
+            LOGGER.info(
+                f"Detection refined: detector bbox=({det_bbox[0]},{det_bbox[1]},{det_bbox[2]},{det_bbox[3]}) "
+                f"-> SAM2 mask bbox=({x_min},{y_min},{x_max},{y_max}) "
+                f"label={det.class_name!r} conf={det.confidence:.2f}"
+            )
             refined.append(Detection(
                 x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max,
                 confidence=det.confidence,
