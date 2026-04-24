@@ -6,7 +6,6 @@ Pipeline: detector bbox → SAM2 mask → depth projection → PointCloudObject
 """
 
 import io
-import math
 import struct
 import threading
 from typing import ClassVar, List, Mapping, Optional, Sequence, Tuple
@@ -40,52 +39,14 @@ from viam.utils import ValueTypes
 
 # Reuse shared utilities from the sam2 module.
 from models.sam2 import _select_device, _find_bundled_checkpoint, _viam_image_to_numpy, _mask_to_bbox
+from spatialmath import transform_points_with_pose
 
 LOGGER = getLogger(__name__)
+# Note: Viam SDK logs appear twice in the app — once via the gRPC pipe (shown as "info")
+# and once via stderr (shown as "error"). This is a known SDK behavior.
+# The stderr copy can be ignored; the "info" line is the authoritative one.
 
 
-def _ov_to_quaternion(o_x: float, o_y: float, o_z: float, theta_deg: float) -> Tuple[float, float, float, float]:
-    """Convert Viam's OrientationVector (from Pose proto) to a quaternion (w, x, y, z).
-
-    (o_x, o_y, o_z) is a point on the unit sphere indicating the Z-axis direction.
-    theta_deg is rotation around that axis in DEGREES (Pose proto uses degrees).
-
-    Conversion: OV(degrees) → OV(radians) → spherical (lon, lat) → ZYZ Euler → quaternion.
-    Matches: rdk/spatialmath/orientationVector.go + mgl64.AnglesToQuat(ZYZ)
-    """
-    theta = math.radians(theta_deg)
-
-    norm = math.sqrt(o_x * o_x + o_y * o_y + o_z * o_z)
-    if norm < 1e-10:
-        return (1.0, 0.0, 0.0, 0.0)
-    o_x, o_y, o_z = o_x / norm, o_y / norm, o_z / norm
-
-    lat = math.acos(max(-1.0, min(1.0, o_z)))
-    lon = math.atan2(o_y, o_x) if abs(1.0 - abs(o_z)) > 1e-4 else 0.0
-
-    c1, s1 = math.cos(lon / 2), math.sin(lon / 2)
-    c2, s2 = math.cos(lat / 2), math.sin(lat / 2)
-    c3, s3 = math.cos(theta / 2), math.sin(theta / 2)
-
-    w = c1 * c2 * c3 - s1 * c2 * s3
-    x = c1 * s2 * s3 - s1 * s2 * c3
-    y = c1 * s2 * c3 + s1 * s2 * s3
-    z = s1 * c2 * c3 + c1 * c2 * s3
-    return (w, x, y, z)
-
-
-def _quat_rotate(q: Tuple[float, float, float, float], v: np.ndarray) -> np.ndarray:
-    """Rotate a vector by a quaternion using q * (0,v) * q_conj.
-    This matches the RDK's dual quaternion Compose + Point() extraction.
-    q = (w, x, y, z), v = (N, 3) array of points. Returns (N, 3)."""
-    qw, qx, qy, qz = q
-    # Build rotation matrix from quaternion (standard formula: v' = q v q*)
-    R = np.array([
-        [1 - 2*(qy*qy + qz*qz),  2*(qx*qy - qw*qz),      2*(qx*qz + qw*qy)],
-        [2*(qx*qy + qw*qz),      1 - 2*(qx*qx + qz*qz),  2*(qy*qz - qw*qx)],
-        [2*(qx*qz - qw*qy),      2*(qy*qz + qw*qx),      1 - 2*(qx*qx + qy*qy)],
-    ])
-    return (R @ v.T).T
 
 
 async def _connect_to_machine() -> Optional[RobotClient]:
@@ -378,12 +339,14 @@ class Sam2Segments(Vision, EasyResource):
 
     async def _transform_points_to_world(self, points_mm: np.ndarray) -> Tuple[np.ndarray, str]:
         """Transform points from camera frame to world frame.
+        Uses Viam's rust utils for OV→quaternion→rotation, matching the Go RDK exactly.
         Points are in mm. Returns (points_mm, reference_frame)."""
         client = await self._ensure_robot_client()
         if client is None:
             return points_mm, self._camera_name
 
         try:
+            # Get camera-to-world pose via transform_pose.
             origin = PoseInFrame(
                 reference_frame=self._camera_name,
                 pose=Pose(x=0, y=0, z=0, o_x=0, o_y=0, o_z=1, theta=0),
@@ -397,14 +360,12 @@ class Sam2Segments(Vision, EasyResource):
                 f"OV=({p.o_x:.4f},{p.o_y:.4f},{p.o_z:.4f}) theta={p.theta:.4f}"
             )
 
-            t = np.array([p.x, p.y, p.z])
-            q = _ov_to_quaternion(p.o_x, p.o_y, p.o_z, p.theta)
-
-            LOGGER.debug(f"Quaternion: w={q[0]:.4f} x={q[1]:.4f} y={q[2]:.4f} z={q[3]:.4f}")
-
-            # world_point = R(q) @ camera_point + translation
-            # This matches RDK's Compose(offset_dq, point_dq).Point()
-            transformed = _quat_rotate(q, points_mm) + t
+            # Use Viam rust utils for the transform (same math as Go RDK).
+            transformed = transform_points_with_pose(
+                p.o_x, p.o_y, p.o_z, p.theta,
+                p.x, p.y, p.z,
+                points_mm,
+            )
             LOGGER.info(f"Transformed {len(points_mm)} points to world frame")
             return transformed, "world"
 
