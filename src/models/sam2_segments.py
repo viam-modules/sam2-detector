@@ -164,6 +164,7 @@ class Sam2Segments(Vision, EasyResource):
     _model_name: str = "facebook/sam2.1-hiera-tiny"
     _depth_threshold_mm: int = 0
     _min_points: int = 50
+    _highlighting_on: bool = False
     _robot_client: Optional[RobotClient] = None
     _lock: threading.Lock
 
@@ -193,6 +194,8 @@ class Sam2Segments(Vision, EasyResource):
             instance._depth_threshold_mm = int(attrs["depth_threshold_mm"].number_value)
         if "min_points" in attrs:
             instance._min_points = int(attrs["min_points"].number_value)
+        if "highlighting_on" in attrs:
+            instance._highlighting_on = attrs["highlighting_on"].bool_value
 
         instance._device = _select_device()
         LOGGER.info(f"Loading SAM2 ImagePredictor ({instance._model_name}) on {instance._device}")
@@ -264,6 +267,22 @@ class Sam2Segments(Vision, EasyResource):
             if not mask.any():
                 return None
             return mask
+
+    def _overlay_masks(self, image: ViamImage, masks: List[Tuple[np.ndarray, Detection]]) -> ViamImage:
+        """Overlay SAM2 segmentation masks on the image with 50% green highlighting."""
+        from viam.media.video import CameraMimeType
+
+        color_np = _viam_image_to_numpy(image)
+        overlay = color_np.copy()
+        green = np.array([0, 255, 0], dtype=np.uint8)
+        for mask, det in masks:
+            bool_mask = mask.astype(bool)
+            overlay[bool_mask] = (overlay[bool_mask].astype(np.float32) * 0.5 + green * 0.5).astype(np.uint8)
+
+        pil = PILImage.fromarray(overlay)
+        buf = io.BytesIO()
+        pil.save(buf, format="JPEG", quality=90)
+        return ViamImage(buf.getvalue(), CameraMimeType.JPEG)
 
     def _mask_to_point_cloud(
         self,
@@ -512,11 +531,39 @@ class Sam2Segments(Vision, EasyResource):
         if not images:
             return result
 
+        color_viam = images[0]
+
+        # If highlighting is on, we need the masks to overlay on the image.
+        masks = []
+        if self._highlighting_on and (return_image or return_detections):
+            color_np = _viam_image_to_numpy(color_viam)
+            upstream = await self._get_filtered_detections(color_viam)
+            for det in upstream:
+                bbox = (det.x_min, det.y_min, det.x_max, det.y_max)
+                mask = self._sam2_refine(color_np, bbox)
+                if mask is not None:
+                    masks.append((mask, det))
+
         if return_image:
-            result.image = images[0]
+            if self._highlighting_on and masks:
+                result.image = self._overlay_masks(color_viam, masks)
+            else:
+                result.image = color_viam
 
         if return_detections:
-            result.detections = await self._get_sam2_refined_detections(images[0])
+            if masks:
+                # We already have the masks; extract refined bboxes from them.
+                result.detections = []
+                for mask, det in masks:
+                    mask_bbox = _mask_to_bbox(mask)
+                    if mask_bbox:
+                        x_min, y_min, x_max, y_max = mask_bbox
+                        result.detections.append(Detection(
+                            x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max,
+                            confidence=det.confidence, class_name=det.class_name,
+                        ))
+            else:
+                result.detections = await self._get_sam2_refined_detections(color_viam)
 
         if return_object_point_clouds:
             result.objects = await self.get_object_point_clouds(

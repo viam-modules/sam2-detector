@@ -24,7 +24,8 @@ The key advantage: unlike projecting all pixels in a bounding box (which include
   "confidence_threshold": 0.5,
   "model_name": "facebook/sam2.1-hiera-tiny",
   "depth_threshold_mm": 200,
-  "min_points": 50
+  "min_points": 50,
+  "highlighting_on": true
 }
 ```
 
@@ -39,6 +40,7 @@ The key advantage: unlike projecting all pixels in a bounding box (which include
 | `model_name` | string | Optional | HuggingFace SAM2 model ID. Default: `facebook/sam2.1-hiera-tiny`. Options: `facebook/sam2.1-hiera-tiny` (149MB), `facebook/sam2.1-hiera-small` (176MB), `facebook/sam2.1-hiera-base-plus` (309MB), `facebook/sam2.1-hiera-large` (856MB). |
 | `depth_threshold_mm` | int | Optional | Maximum deviation from median depth (in mm) to keep a point. Removes background bleed-through. Default: `0` (disabled). |
 | `min_points` | int | Optional | Minimum number of 3D points for a valid segment. Segments with fewer points are discarded. Default: `50`. |
+| `highlighting_on` | bool | Optional | When true, images returned by `capture_all_from_camera` have SAM2 segmentation masks overlaid in semi-transparent green (50% opacity). Default: `false`. |
 
 ### Example Configuration
 
