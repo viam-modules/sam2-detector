@@ -10,9 +10,9 @@ viam-sdk, numpy, pillow.
 
 Usage:
     cd /Users/bijanh/viam/vino/sam2
-    uv run python debug_projection.py
+    uv run python debug/debug_projection.py
     # or override the camera name:
-    VIAM_RAW_CAMERA=other-camera uv run python debug_projection.py
+    VIAM_RAW_CAMERA=other-camera uv run python debug/debug_projection.py
 
 Outputs (in cwd):
     debug_native.pcd        verbatim camera PCD bytes
@@ -40,12 +40,12 @@ from viam.robot.client import RobotClient
 from viam.rpc.dial import DialOptions
 
 # sam2's manual camera->world transform path (rust util via ctypes).
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from spatialmath import transform_points_with_pose  # noqa: E402
 
 # --- env loading: same pattern as test_pointclouds.py ----------------------
 
-env_path = os.path.join(os.path.dirname(__file__), "..", "viam.env")
+env_path = os.path.join(os.path.dirname(__file__), "..", "..", "viam.env")
 if os.path.exists(env_path):
     with open(env_path) as f:
         for line in f:

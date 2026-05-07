@@ -8,3 +8,23 @@ wheels/
 
 # Virtual environments
 .venv
+
+# macOS
+.DS_Store
+
+# Module build artifacts
+module.tar.gz
+reload-dist/
+checkpoints/
+
+# Local debug artifacts produced by scripts in debug/
+# (the scripts themselves are tracked; their outputs are not)
+debug_*.pcd
+debug_*.png
+debug/debug_*.pcd
+debug/debug_*.png
+
+# Captured screenshots / point cloud snapshots saved next to the repo
+cam-*.png
+sam2-segmenter-*.png
+sam2_segments_*.png
