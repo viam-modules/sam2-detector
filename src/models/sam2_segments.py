@@ -295,8 +295,12 @@ class Sam2Segments(Vision, EasyResource):
         vs, us = np.where(mask)
         depths = depth_np[vs, us].astype(np.float64)
 
-        # Filter zero-depth pixels.
-        valid = depths > 0
+        # Filter zero-depth and out-of-range pixels. uint16 sensors encode
+        # "no return" as 0 or 65535; many also report bogus far values when
+        # the surface is transparent/specular (cups, glass tape). Anything
+        # beyond 20 m is not a real measurement for the indoor cameras this
+        # module targets.
+        valid = (depths > 0) & (depths < 20000)
         vs, us, depths = vs[valid], us[valid], depths[valid]
         if len(depths) == 0:
             return np.empty((0, 3)), np.empty((0, 3), dtype=np.uint8)
