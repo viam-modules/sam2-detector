@@ -11,6 +11,13 @@ SAM2_MODEL="${SAM2_MODEL:-facebook/sam2.1-hiera-tiny}"
 # re-resolve torch from PyPI and overwrite the ROCm version.
 PYTHON=".venv/bin/python"
 
+# On Jetson, libcudss.so.0 lives inside the venv (nvidia-cudss-cu12 wheel) and
+# the Jetson torch wheel dlopens it. Make it discoverable for any python
+# invocation in this script that imports torch.
+if [ -f /etc/nv_tegra_release ]; then
+    export LD_LIBRARY_PATH="$(pwd)/.venv/lib/python3.10/site-packages/nvidia/cu12/lib:${LD_LIBRARY_PATH}"
+fi
+
 # Verify torch is the right version before building.
 echo "Bundling torch version: $($PYTHON -c 'import torch; print(torch.__version__)')"
 

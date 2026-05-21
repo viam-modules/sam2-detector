@@ -3,7 +3,7 @@ name = "viam-sam2-detector"
 version = "0.1.0"
 description = "Viam vision module using Meta SAM2 for single-object segmentation and tracking"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "viam-sdk",
     "typing-extensions",

@@ -2,9 +2,10 @@
 import os
 import sys
 import platform
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 sys.setrecursionlimit(5000)
 
-# Build target: "darwin", "linux-cpu", or "linux-rocm"
+# Build target: "darwin", "linux-cpu", "linux-rocm", or "linux-tegra"
 # Auto-detected from platform, or override with SAM2_BUILD_TARGET env var.
 def _detect_target():
     override = os.environ.get('SAM2_BUILD_TARGET')
@@ -13,6 +14,8 @@ def _detect_target():
     if platform.system() == 'Darwin':
         return 'darwin'
     if platform.system() == 'Linux':
+        if os.path.exists('/etc/nv_tegra_release'):
+            return 'linux-tegra'
         if os.path.exists('/opt/rocm'):
             return 'linux-rocm'
         return 'linux-cpu'
@@ -42,12 +45,39 @@ if _rust_lib:
     print(f'[main.spec] Including Viam rust utils: {_rust_lib}')
     _extra_binaries.append((_rust_lib, 'viam/rpc'))
 
+# On Jetson, the Jetson-specific torch wheel dlopens libcudss.so.0 (from the
+# nvidia-cudss-cu12 wheel) — PyInstaller's dependency walker won't find it
+# unless we add it explicitly. Bundle every .so under nvidia/cu12/lib so that
+# cudss, cublas, and friends all land in the same dir in the bundle.
+if BUILD_TARGET == 'linux-tegra':
+    import glob
+    _nv_lib_dir = os.path.join(
+        os.path.dirname(sys.executable), '..', 'lib',
+        f'python{sys.version_info.major}.{sys.version_info.minor}',
+        'site-packages', 'nvidia', 'cu12', 'lib',
+    )
+    _nv_lib_dir = os.path.abspath(_nv_lib_dir)
+    if os.path.isdir(_nv_lib_dir):
+        for _so in glob.glob(os.path.join(_nv_lib_dir, '*.so*')):
+            print(f'[main.spec] Including Jetson nvidia lib: {_so}')
+            _extra_binaries.append((_so, 'nvidia/cu12/lib'))
+    else:
+        print(f'[main.spec] WARNING: nvidia/cu12/lib not found at {_nv_lib_dir}')
+
+# SAM2 loads Hydra YAML configs from inside its package at runtime; PyInstaller
+# won't bundle them unless we explicitly collect them.
+_sam2_datas = collect_data_files('sam2')
+_sam2_hidden = collect_submodules('sam2')
+# torch._dynamo.polyfills.loader iterates a hardcoded list and dynamically
+# imports each polyfill submodule; PyInstaller's static analysis misses them.
+_torch_dynamo_hidden = collect_submodules('torch._dynamo')
+
 a = Analysis(
     ['src/main.py'],
     pathex=[],
     binaries=_extra_binaries,
-    datas=[],
-    hiddenimports=['googleapiclient', 'viam', 'sam2'],
+    datas=_sam2_datas,
+    hiddenimports=['googleapiclient', 'viam', *_sam2_hidden, *_torch_dynamo_hidden],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=['src/hooks/rocm_env.py'],
@@ -64,8 +94,8 @@ if BUILD_TARGET == 'linux-rocm':
 
 pyz = PYZ(a.pure)
 
-if BUILD_TARGET == 'linux-rocm':
-    # ROCm: onedir to avoid 4GB single-file limit.
+if BUILD_TARGET in ('linux-rocm', 'linux-tegra'):
+    # ROCm / Jetson: onedir to avoid 4GB single-file limit.
     exe = EXE(
         pyz,
         a.scripts,
