@@ -173,6 +173,7 @@ class Sam2Segments(Vision, EasyResource):
     _depth_threshold_mm: int = 0
     _min_points: int = 50
     _highlighting_on: bool = False
+    _debug: bool = False
     _robot_client: Optional[RobotClient] = None
     _lock: threading.Lock
 
@@ -204,6 +205,8 @@ class Sam2Segments(Vision, EasyResource):
             instance._min_points = int(attrs["min_points"].number_value)
         if "highlighting_on" in attrs:
             instance._highlighting_on = attrs["highlighting_on"].bool_value
+        if "debug" in attrs:
+            instance._debug = attrs["debug"].bool_value
 
         instance._device = _select_device()
         LOGGER.info(f"Loading SAM2 ImagePredictor ({instance._model_name}) on {instance._device}")
@@ -292,14 +295,16 @@ class Sam2Segments(Vision, EasyResource):
         pil.save(buf, format="JPEG", quality=90)
         return ViamImage(buf.getvalue(), CameraMimeType.JPEG)
 
-    def _mask_to_point_cloud(
+    def _mask_to_points_raw(
         self,
         mask: np.ndarray,
         color_np: np.ndarray,
         depth_np: np.ndarray,
         fx: float, fy: float, ppx: float, ppy: float,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Project masked pixels to 3D using pinhole camera model. Returns (points, colors)."""
+        """Project masked pixels to 3D using pinhole camera model, with only basic
+        valid-depth filtering applied (no median-based outlier cleaning).
+        Returns (points, colors) — the "before cleaning" point cloud."""
         vs, us = np.where(mask)
         depths = depth_np[vs, us].astype(np.float64)
 
@@ -310,14 +315,6 @@ class Sam2Segments(Vision, EasyResource):
         if len(depths) == 0:
             return np.empty((0, 3)), np.empty((0, 3), dtype=np.uint8)
 
-        # Filter by depth threshold (median ± threshold).
-        if self._depth_threshold_mm > 0:
-            median = np.median(depths)
-            within = np.abs(depths - median) <= self._depth_threshold_mm
-            vs, us, depths = vs[within], us[within], depths[within]
-            if len(depths) == 0:
-                return np.empty((0, 3)), np.empty((0, 3), dtype=np.uint8)
-
         # Pinhole projection: pixel (u, v, Z) → 3D (X, Y, Z).
         xs = (us.astype(np.float64) - ppx) * depths / fx
         ys = (vs.astype(np.float64) - ppy) * depths / fy
@@ -327,6 +324,17 @@ class Sam2Segments(Vision, EasyResource):
         colors = color_np[vs, us]  # (N, 3) uint8
 
         return points, colors
+
+    def _clean_points(
+        self, points: np.ndarray, colors: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Apply median ± depth_threshold_mm outlier removal on Z."""
+        if self._depth_threshold_mm <= 0 or len(points) == 0:
+            return points, colors
+        depths = points[:, 2]
+        median = np.median(depths)
+        within = np.abs(depths - median) <= self._depth_threshold_mm
+        return points[within], colors[within]
 
     def _build_point_cloud_object(
         self, points: np.ndarray, colors: np.ndarray, label: str, ref_frame: str = ""
@@ -438,10 +446,11 @@ class Sam2Segments(Vision, EasyResource):
                 LOGGER.debug(f"SAM2 returned empty mask for bbox {bbox}")
                 continue
 
-            # Project masked pixels to 3D.
-            points, colors = self._mask_to_point_cloud(
+            # Project masked pixels to 3D (pre-cleaning), then apply outlier removal.
+            points_raw, colors_raw = self._mask_to_points_raw(
                 mask, color_np, depth_np, fx, fy, ppx, ppy
             )
+            points, colors = self._clean_points(points_raw, colors_raw)
             if len(points) < self._min_points:
                 LOGGER.debug(f"Skipping segment with {len(points)} points (min={self._min_points})")
                 continue
@@ -464,6 +473,13 @@ class Sam2Segments(Vision, EasyResource):
 
             pco = self._build_point_cloud_object(points, colors, label, ref_frame)
             results.append(pco)
+
+            if self._debug:
+                points_raw_world, raw_ref_frame = await self._transform_points_to_world(points_raw)
+                debug_pco = self._build_point_cloud_object(
+                    points_raw_world, colors_raw, f"debug_{label}_before_cleaning", raw_ref_frame,
+                )
+                results.append(debug_pco)
 
         LOGGER.info(f"Returning {len(results)} point cloud objects")
         return results
