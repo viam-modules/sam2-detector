@@ -24,7 +24,8 @@ The key advantage: unlike projecting all pixels in a bounding box (which include
   "confidence_threshold": 0.5,
   "depth_threshold_mm": 200,
   "min_points": 50,
-  "highlighting_on": true
+  "highlighting_on": true,
+  "highlight_color": { "r": 0, "g": 255, "b": 0 }
 }
 ```
 
@@ -38,7 +39,8 @@ The key advantage: unlike projecting all pixels in a bounding box (which include
 | `confidence_threshold` | float | Optional | Minimum confidence score from the upstream detector. Default: `0.5`. |
 | `depth_threshold_mm` | int | Optional | Maximum deviation from median depth (in mm) to keep a point. Removes background bleed-through. Default: `0` (disabled). |
 | `min_points` | int | Optional | Minimum number of 3D points for a valid segment. Segments with fewer points are discarded. Default: `50`. |
-| `highlighting_on` | bool | Optional | When true, images returned by `capture_all_from_camera` have SAM2 segmentation masks overlaid in semi-transparent green (50% opacity). Default: `false`. |
+| `highlighting_on` | bool | Optional | When true, images returned by `capture_all_from_camera` have SAM2 segmentation masks overlaid at 50% opacity. Default: `false`. |
+| `highlight_color` | object | Optional | RGB color used for the mask overlay when `highlighting_on` is true. Object with `r`, `g`, `b` integer fields in the range 0–255. Default: `{ "r": 0, "g": 255, "b": 0 }` (green). |
 
 ### Example Configuration
 

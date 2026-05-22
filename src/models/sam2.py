@@ -132,13 +132,13 @@ def _viam_image_to_numpy(image: ViamImage) -> np.ndarray:
 class Sam2(Vision, EasyResource):
     MODEL: ClassVar[Model] = Model(ModelFamily("viam", "sam2-detector"), "sam2")
 
-    _predictor: Optional[SAM2VideoPredictor] = None
+    _predictor: SAM2VideoPredictor
     _device: str = "cpu"
     _initial_point: Optional[Tuple[int, int]] = None
     _label: str = "object"
     _max_frames: int = DEFAULT_MAX_FRAMES
     _camera_name: str = ""
-    _camera: Optional[ResourceBase] = None
+    _camera: ResourceBase
 
     # Sliding window of frames stored as numbered JPEGs in a temp dir.
     # Only the most recent _max_frames are kept.

@@ -157,10 +157,10 @@ class Sam2Segments(Vision, EasyResource):
 
     MODEL: ClassVar[Model] = Model(ModelFamily("viam", "sam2-detector"), "sam2-segments")
 
-    _predictor: Optional[SAM2ImagePredictor] = None
+    _predictor: SAM2ImagePredictor
     _device: str = "cpu"
-    _detector: Optional[ResourceBase] = None
-    _camera: Optional[ResourceBase] = None
+    _detector: ResourceBase
+    _camera: ResourceBase
     _detector_name: str = ""
     _camera_name: str = ""
     _label: str = ""
@@ -168,6 +168,7 @@ class Sam2Segments(Vision, EasyResource):
     _depth_threshold_mm: int = 0
     _min_points: int = 50
     _highlighting_on: bool = False
+    _highlight_color: Tuple[int, int, int] = (0, 255, 0)
     _debug: bool = False
     _robot_client: Optional[RobotClient] = None
     _lock: threading.Lock
@@ -198,6 +199,13 @@ class Sam2Segments(Vision, EasyResource):
             instance._min_points = int(attrs["min_points"].number_value)
         if "highlighting_on" in attrs:
             instance._highlighting_on = attrs["highlighting_on"].bool_value
+        if "highlight_color" in attrs:
+            color_fields = attrs["highlight_color"].struct_value.fields
+            instance._highlight_color = (
+                max(0, min(255, int(color_fields["r"].number_value))),
+                max(0, min(255, int(color_fields["g"].number_value))),
+                max(0, min(255, int(color_fields["b"].number_value))),
+            )
         if "debug" in attrs:
             instance._debug = attrs["debug"].bool_value
 
@@ -278,10 +286,10 @@ class Sam2Segments(Vision, EasyResource):
 
         color_np = _viam_image_to_numpy(image)
         overlay = color_np.copy()
-        green = np.array([0, 255, 0], dtype=np.uint8)
+        color = np.array(self._highlight_color, dtype=np.uint8)
         for mask, det in masks:
             bool_mask = mask.astype(bool)
-            overlay[bool_mask] = (overlay[bool_mask].astype(np.float32) * 0.5 + green * 0.5).astype(np.uint8)
+            overlay[bool_mask] = (overlay[bool_mask].astype(np.float32) * 0.5 + color * 0.5).astype(np.uint8)
 
         pil = PILImage.fromarray(overlay)
         buf = io.BytesIO()
