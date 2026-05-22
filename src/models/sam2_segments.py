@@ -38,7 +38,7 @@ from viam.services.vision import *
 from viam.utils import ValueTypes
 
 # Reuse shared utilities from the sam2 module.
-from models.sam2 import _select_device, _find_bundled_checkpoint, _viam_image_to_numpy, _mask_to_bbox
+from models.sam2 import _select_device, _find_bundled_checkpoint, _viam_image_to_numpy, _mask_to_bbox, SAM2_MODEL_ID
 from spatialmath import transform_points_with_pose
 
 LOGGER = getLogger(__name__)
@@ -91,17 +91,13 @@ async def _connect_to_machine() -> Optional[RobotClient]:
         return None
 
 
-def _load_image_predictor(model_name: str, device: str) -> SAM2ImagePredictor:
-    """Load SAM2 ImagePredictor, preferring a bundled checkpoint."""
-    bundled = _find_bundled_checkpoint(model_name)
-    if bundled is not None:
-        config_name, ckpt_path = bundled
-        LOGGER.info(f"Loading ImagePredictor from bundled checkpoint: {ckpt_path}")
-        from sam2.build_sam import build_sam2
-        model = build_sam2(config_name, ckpt_path, device=device)
-        return SAM2ImagePredictor(model)
-    LOGGER.info(f"Downloading ImagePredictor from HuggingFace: {model_name}")
-    return SAM2ImagePredictor.from_pretrained(model_name, device=device)
+def _load_image_predictor(device: str) -> SAM2ImagePredictor:
+    """Load SAM2 ImagePredictor from the bundled checkpoint."""
+    config_name, ckpt_path = _find_bundled_checkpoint()
+    LOGGER.info(f"Loading SAM2 ImagePredictor from bundled checkpoint: {ckpt_path}")
+    from sam2.build_sam import build_sam2
+    model = build_sam2(config_name, ckpt_path, device=device)
+    return SAM2ImagePredictor(model)
 
 
 def _depth_image_to_numpy(image: ViamImage) -> np.ndarray:
@@ -169,7 +165,6 @@ class Sam2Segments(Vision, EasyResource):
     _camera_name: str = ""
     _label: str = ""
     _confidence_threshold: float = 0.5
-    _model_name: str = "facebook/sam2.1-hiera-tiny"
     _depth_threshold_mm: int = 0
     _min_points: int = 50
     _highlighting_on: bool = False
@@ -197,8 +192,6 @@ class Sam2Segments(Vision, EasyResource):
             instance._label = attrs["label"].string_value
         if "confidence_threshold" in attrs:
             instance._confidence_threshold = attrs["confidence_threshold"].number_value
-        if "model_name" in attrs:
-            instance._model_name = attrs["model_name"].string_value
         if "depth_threshold_mm" in attrs:
             instance._depth_threshold_mm = int(attrs["depth_threshold_mm"].number_value)
         if "min_points" in attrs:
@@ -209,8 +202,8 @@ class Sam2Segments(Vision, EasyResource):
             instance._debug = attrs["debug"].bool_value
 
         instance._device = _select_device()
-        LOGGER.info(f"Loading SAM2 ImagePredictor ({instance._model_name}) on {instance._device}")
-        instance._predictor = _load_image_predictor(instance._model_name, instance._device)
+        LOGGER.info(f"Loading SAM2 ImagePredictor ({SAM2_MODEL_ID}) on {instance._device}")
+        instance._predictor = _load_image_predictor(instance._device)
         LOGGER.info("SAM2 ImagePredictor loaded")
 
         # Connect to the machine for frame transforms (async, done lazily on first use).
@@ -634,7 +627,7 @@ class Sam2Segments(Vision, EasyResource):
                 "camera_name": self._camera_name,
                 "label": self._label,
                 "confidence_threshold": self._confidence_threshold,
-                "model_name": self._model_name,
+                "model_name": SAM2_MODEL_ID,
                 "device": self._device,
                 "depth_threshold_mm": float(self._depth_threshold_mm),
                 "min_points": float(self._min_points),

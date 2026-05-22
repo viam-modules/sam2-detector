@@ -11,7 +11,6 @@ Frames arrive one at a time via `get_detections`. Each frame is buffered and per
   "camera_name": "my-camera",
   "initial_point_x": 600,
   "initial_point_y": 300,
-  "model_name": "facebook/sam2.1-hiera-tiny",
   "label": "glass",
   "propagation_interval": 1,
   "max_frames": 300
@@ -25,7 +24,6 @@ Frames arrive one at a time via `get_detections`. Each frame is buffered and per
 | `camera_name` | string | **Required** | Camera to use for `get_detections_from_camera`. Added as a required dependency. |
 | `initial_point_x` | int | **Required** | X pixel coordinate of the object to track in the first frame |
 | `initial_point_y` | int | **Required** | Y pixel coordinate of the object to track in the first frame |
-| `model_name` | string | Optional | HuggingFace model ID. Default: `facebook/sam2.1-hiera-tiny`. Options: `facebook/sam2.1-hiera-tiny` (149MB), `facebook/sam2.1-hiera-small` (176MB), `facebook/sam2.1-hiera-base-plus` (309MB), `facebook/sam2.1-hiera-large` (856MB) |
 | `label` | string | Optional | Class name returned in detections. Default: `object` |
 | `propagation_interval` | int | Optional | Re-run SAM2 propagation every N frames. Higher values reduce compute but increase detection latency. Default: `1` |
 | `max_frames` | int | Optional | Maximum frames to keep in the sliding window. Older frames are discarded to bound disk usage. Default: `300` |

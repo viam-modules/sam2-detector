@@ -70,6 +70,11 @@ OBJ_ID = 1
 # Max frames to keep in the sliding window. Older frames are discarded.
 DEFAULT_MAX_FRAMES = 300
 
+# Bundled model. The build script downloads this checkpoint into
+# checkpoints/ and packages it inside the module tarball. There is no
+# config knob to change it: callers always get this exact model.
+SAM2_MODEL_ID = "facebook/sam2.1-hiera-tiny"
+
 
 def _select_device() -> str:
     if torch.cuda.is_available():
@@ -83,36 +88,31 @@ def _select_device() -> str:
     return "cpu"
 
 
-def _find_bundled_checkpoint(model_name: str) -> Optional[Tuple[str, str]]:
-    """Check if a checkpoint is bundled alongside the module binary."""
-    if model_name not in HF_MODEL_ID_TO_FILENAMES:
-        return None
-    config_name, ckpt_filename = HF_MODEL_ID_TO_FILENAMES[model_name]
-    # Look relative to this file, then relative to the executable.
+def _find_bundled_checkpoint() -> Tuple[str, str]:
+    """Locate the bundled SAM2 checkpoint shipped with the module. Raises if missing."""
+    config_name, ckpt_filename = HF_MODEL_ID_TO_FILENAMES[SAM2_MODEL_ID]
     search_dirs = [
         os.path.dirname(os.path.abspath(__file__)),  # src/models/
         os.path.dirname(os.path.abspath(__file__)) + "/../..",  # sam2-detector/
         os.getcwd(),
     ]
-    # Also check for a BUNDLE_DIR env var (set by PyInstaller via --runtime-tmpdir or similar).
     if hasattr(sys, "_MEIPASS"):
         search_dirs.insert(0, sys._MEIPASS)
     for d in search_dirs:
         path = os.path.join(d, "checkpoints", ckpt_filename)
         if os.path.isfile(path):
             return config_name, path
-    return None
+    raise FileNotFoundError(
+        f"Bundled SAM2 checkpoint {ckpt_filename} not found in any of: "
+        f"{[os.path.join(d, 'checkpoints') for d in search_dirs]}"
+    )
 
 
-def _load_predictor(model_name: str, device: str) -> SAM2VideoPredictor:
-    """Load SAM2 VideoPredictor, preferring a bundled checkpoint over HuggingFace download."""
-    bundled = _find_bundled_checkpoint(model_name)
-    if bundled is not None:
-        config_name, ckpt_path = bundled
-        LOGGER.info(f"Loading from bundled checkpoint: {ckpt_path}")
-        return build_sam2_video_predictor(config_name, ckpt_path, device=device)
-    LOGGER.info(f"No bundled checkpoint found, downloading from HuggingFace: {model_name}")
-    return SAM2VideoPredictor.from_pretrained(model_name, device=device)
+def _load_predictor(device: str) -> SAM2VideoPredictor:
+    """Load SAM2 VideoPredictor from the bundled checkpoint."""
+    config_name, ckpt_path = _find_bundled_checkpoint()
+    LOGGER.info(f"Loading SAM2 VideoPredictor from bundled checkpoint: {ckpt_path}")
+    return build_sam2_video_predictor(config_name, ckpt_path, device=device)
 
 
 def _mask_to_bbox(mask: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
@@ -136,7 +136,6 @@ class Sam2(Vision, EasyResource):
     _device: str = "cpu"
     _initial_point: Optional[Tuple[int, int]] = None
     _label: str = "object"
-    _model_name: str = "facebook/sam2.1-hiera-tiny"
     _max_frames: int = DEFAULT_MAX_FRAMES
     _camera_name: str = ""
     _camera: Optional[ResourceBase] = None
@@ -184,8 +183,6 @@ class Sam2(Vision, EasyResource):
 
         if "label" in attrs:
             instance._label = attrs["label"].string_value
-        if "model_name" in attrs:
-            instance._model_name = attrs["model_name"].string_value
         if "propagation_interval" in attrs:
             instance._propagation_interval = int(attrs["propagation_interval"].number_value)
         if "max_frames" in attrs:
@@ -197,8 +194,8 @@ class Sam2(Vision, EasyResource):
         instance._frame_dir = tempfile.mkdtemp(prefix="sam2_frames_")
 
         instance._device = _select_device()
-        LOGGER.info(f"Loading SAM2 model {instance._model_name} on {instance._device}")
-        instance._predictor = _load_predictor(instance._model_name, instance._device)
+        LOGGER.info(f"Loading SAM2 model {SAM2_MODEL_ID} on {instance._device}")
+        instance._predictor = _load_predictor(instance._device)
         LOGGER.info("SAM2 model loaded")
         return instance
 
@@ -474,7 +471,7 @@ class Sam2(Vision, EasyResource):
                 "max_frames": float(self._max_frames),
                 "detections_cached": float(len(self._detections)),
                 "device": self._device,
-                "model_name": self._model_name,
+                "model_name": SAM2_MODEL_ID,
                 "propagation_interval": float(self._propagation_interval),
             }
 
