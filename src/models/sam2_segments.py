@@ -72,7 +72,7 @@ async def _connect_to_machine() -> Optional[RobotClient]:
     if not api_key:
         missing.append("VIAM_API_KEY")
     if missing:
-        LOGGER.info(
+        LOGGER.warn(
             f"Frame system unavailable: missing environment variable(s): {', '.join(missing)}. "
             f"Point clouds will be returned in camera frame instead of world frame."
         )
@@ -84,7 +84,7 @@ async def _connect_to_machine() -> Optional[RobotClient]:
                 dial_options=DialOptions.with_api_key(api_key=api_key, api_key_id=api_key_id),
             ),
         )
-        LOGGER.info(f"Connected to machine at {host} for frame transforms")
+        LOGGER.debug(f"Connected to machine at {host} for frame transforms")
         return client
     except Exception as e:
         LOGGER.warn(f"Could not connect to machine for frame transforms: {e}")
@@ -94,7 +94,7 @@ async def _connect_to_machine() -> Optional[RobotClient]:
 def _load_image_predictor(device: str) -> SAM2ImagePredictor:
     """Load SAM2 ImagePredictor from the bundled checkpoint."""
     config_name, ckpt_path = _find_bundled_checkpoint()
-    LOGGER.info(f"Loading SAM2 ImagePredictor from bundled checkpoint: {ckpt_path}")
+    LOGGER.debug(f"Loading SAM2 ImagePredictor from bundled checkpoint: {ckpt_path}")
     from sam2.build_sam import build_sam2
     model = build_sam2(config_name, ckpt_path, device=device)
     return SAM2ImagePredictor(model)
@@ -186,7 +186,7 @@ class Sam2Segments(Vision, EasyResource):
         # Resolve dependencies.
         instance._detector = dependencies[Vision.get_resource_name(instance._detector_name)]
         instance._camera = dependencies[Camera.get_resource_name(instance._camera_name)]
-        LOGGER.info(f"Using detector: {instance._detector_name}, camera: {instance._camera_name}")
+        LOGGER.debug(f"Using detector: {instance._detector_name}, camera: {instance._camera_name}")
 
         if "label" in attrs:
             instance._label = attrs["label"].string_value
@@ -202,7 +202,7 @@ class Sam2Segments(Vision, EasyResource):
             instance._debug = attrs["debug"].bool_value
 
         instance._device = _select_device()
-        LOGGER.info(f"Loading SAM2 ImagePredictor ({SAM2_MODEL_ID}) on {instance._device}")
+        LOGGER.debug(f"Loading SAM2 ImagePredictor ({SAM2_MODEL_ID}) on {instance._device}")
         instance._predictor = _load_image_predictor(instance._device)
         LOGGER.info("SAM2 ImagePredictor loaded")
 
@@ -383,7 +383,7 @@ class Sam2Segments(Vision, EasyResource):
             world_pose_in_frame = await client.transform_pose(origin, "world")
             p = world_pose_in_frame.pose
 
-            LOGGER.info(
+            LOGGER.debug(
                 f"Frame transform {self._camera_name} -> world: "
                 f"translation=({p.x:.1f},{p.y:.1f},{p.z:.1f})mm "
                 f"OV=({p.o_x:.4f},{p.o_y:.4f},{p.o_z:.4f}) theta={p.theta:.4f}"
@@ -395,7 +395,7 @@ class Sam2Segments(Vision, EasyResource):
                 p.x, p.y, p.z,
                 points_mm,
             )
-            LOGGER.info(f"Transformed {len(points_mm)} points to world frame")
+            LOGGER.debug(f"Transformed {len(points_mm)} points to world frame")
             return transformed, "world"
 
         except Exception as e:
@@ -451,7 +451,7 @@ class Sam2Segments(Vision, EasyResource):
             label = det.class_name or self._label or "object"
 
             cam_center = points.mean(axis=0)
-            LOGGER.info(
+            LOGGER.debug(
                 f"Segment '{label}': {len(points)} pts, "
                 f"camera frame center=({cam_center[0]:.0f},{cam_center[1]:.0f},{cam_center[2]:.0f})mm"
             )
@@ -460,7 +460,7 @@ class Sam2Segments(Vision, EasyResource):
             points, ref_frame = await self._transform_points_to_world(points)
 
             world_center = points.mean(axis=0)
-            LOGGER.info(
+            LOGGER.debug(
                 f"  -> {ref_frame} frame center=({world_center[0]:.0f},{world_center[1]:.0f},{world_center[2]:.0f})mm"
             )
 
@@ -474,7 +474,7 @@ class Sam2Segments(Vision, EasyResource):
                 )
                 results.append(debug_pco)
 
-        LOGGER.info(f"Returning {len(results)} point cloud objects")
+        LOGGER.debug(f"Returning {len(results)} point cloud objects")
         return results
 
     async def _get_sam2_refined_detections(self, image: ViamImage) -> List[Detection]:
@@ -493,7 +493,7 @@ class Sam2Segments(Vision, EasyResource):
             if mask_bbox is None:
                 continue
             x_min, y_min, x_max, y_max = mask_bbox
-            LOGGER.info(
+            LOGGER.debug(
                 f"Detection refined: detector bbox=({det_bbox[0]},{det_bbox[1]},{det_bbox[2]},{det_bbox[3]}) "
                 f"-> SAM2 mask bbox=({x_min},{y_min},{x_max},{y_max}) "
                 f"label={det.class_name!r} conf={det.confidence:.2f}"

@@ -79,12 +79,12 @@ SAM2_MODEL_ID = "facebook/sam2.1-hiera-tiny"
 def _select_device() -> str:
     if torch.cuda.is_available():
         device_name = torch.cuda.get_device_name(0)
-        LOGGER.info(f"Using CUDA GPU: {device_name}")
+        LOGGER.debug(f"Using CUDA GPU: {device_name}")
         return "cuda"
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        LOGGER.info("Using Apple MPS (Metal Performance Shaders)")
+        LOGGER.debug("Using Apple MPS (Metal Performance Shaders)")
         return "mps"
-    LOGGER.info("No GPU detected, using CPU")
+    LOGGER.debug("No GPU detected, using CPU")
     return "cpu"
 
 
@@ -111,7 +111,7 @@ def _find_bundled_checkpoint() -> Tuple[str, str]:
 def _load_predictor(device: str) -> SAM2VideoPredictor:
     """Load SAM2 VideoPredictor from the bundled checkpoint."""
     config_name, ckpt_path = _find_bundled_checkpoint()
-    LOGGER.info(f"Loading SAM2 VideoPredictor from bundled checkpoint: {ckpt_path}")
+    LOGGER.debug(f"Loading SAM2 VideoPredictor from bundled checkpoint: {ckpt_path}")
     return build_sam2_video_predictor(config_name, ckpt_path, device=device)
 
 
@@ -169,14 +169,14 @@ class Sam2(Vision, EasyResource):
         instance._camera_name = attrs["camera_name"].string_value
         from viam.components.camera import Camera
         instance._camera = dependencies[Camera.get_resource_name(instance._camera_name)]
-        LOGGER.info(f"Using camera: {instance._camera_name}")
+        LOGGER.debug(f"Using camera: {instance._camera_name}")
 
         if "initial_point_x" in attrs and "initial_point_y" in attrs:
             instance._initial_point = (
                 int(attrs["initial_point_x"].number_value),
                 int(attrs["initial_point_y"].number_value),
             )
-            LOGGER.info(f"Initial point: {instance._initial_point}")
+            LOGGER.debug(f"Initial point: {instance._initial_point}")
         else:
             instance._initial_point = None
             LOGGER.warn("No initial point configured; tracking will not start until set_point is called")
@@ -194,7 +194,7 @@ class Sam2(Vision, EasyResource):
         instance._frame_dir = tempfile.mkdtemp(prefix="sam2_frames_")
 
         instance._device = _select_device()
-        LOGGER.info(f"Loading SAM2 model {SAM2_MODEL_ID} on {instance._device}")
+        LOGGER.debug(f"Loading SAM2 model {SAM2_MODEL_ID} on {instance._device}")
         instance._predictor = _load_predictor(instance._device)
         LOGGER.info("SAM2 model loaded")
         return instance
@@ -422,7 +422,7 @@ class Sam2(Vision, EasyResource):
         """Clean up temp files on shutdown."""
         if self._frame_dir and os.path.isdir(self._frame_dir):
             shutil.rmtree(self._frame_dir, ignore_errors=True)
-            LOGGER.info(f"Cleaned up frame directory: {self._frame_dir}")
+            LOGGER.debug(f"Cleaned up frame directory: {self._frame_dir}")
         self._frame_dir = None
 
     async def do_command(
