@@ -2,87 +2,72 @@
 set -e
 cd "$(dirname "$0")"
 
-# Platform-specific PyTorch index.
-# Linux with AMD GPU uses ROCm, everything else uses default PyPI.
 ROCM_INDEX="https://download.pytorch.org/whl/rocm6.3"
+CPU_INDEX="https://download.pytorch.org/whl/cpu"
+PYTHON_VERSION="3.11"
 
 detect_platform() {
+    # Allow explicit override via SAM2_BUILD_TARGET env var.
+    if [ -n "$SAM2_BUILD_TARGET" ]; then
+        echo "$SAM2_BUILD_TARGET"
+        return
+    fi
     OS="$(uname -s)"
     if [ "$OS" = "Linux" ]; then
-        # Check for AMD GPU (ROCm).
         if command -v rocminfo >/dev/null 2>&1 || [ -d /opt/rocm ]; then
             echo "linux-rocm"
         else
-            echo "linux"
+            echo "linux-cpu"
         fi
     elif [ "$OS" = "Darwin" ]; then
         echo "darwin"
     else
-        echo "unknown"
+        echo "linux-cpu"
     fi
+}
+
+ensure_uv() {
+    if command -v uv >/dev/null 2>&1; then
+        echo "uv found: $(uv --version)"
+        return
+    fi
+    echo "uv not found, installing..."
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+    if ! command -v uv >/dev/null 2>&1; then
+        echo "ERROR: Failed to install uv" >&2
+        exit 1
+    fi
+    echo "uv installed: $(uv --version)"
 }
 
 PLATFORM="$(detect_platform)"
 echo "Detected platform: $PLATFORM"
 
-if command -v uv >/dev/null 2>&1; then
-    echo "Using uv for environment setup..."
-    UV_PROJECT="$(pwd)/.."
+ensure_uv
 
-    # Install PyTorch with the right index for the platform.
-    if [ "$PLATFORM" = "linux-rocm" ]; then
-        echo "Installing PyTorch with ROCm support..."
-        uv pip install --project "$UV_PROJECT" \
-            torch torchvision --index-url "$ROCM_INDEX"
-    else
-        echo "Installing PyTorch (standard)..."
-        uv pip install --project "$UV_PROJECT" torch torchvision
-    fi
-
-    # Install remaining dependencies via the project.
-    uv sync --project "$UV_PROJECT"
-    echo "uv setup complete."
-else
-    echo "Using pip + venv for environment setup..."
-    VENV_NAME="venv"
-    PYTHON="$VENV_NAME/bin/python"
-    ENV_ERROR="This module requires Python >=3.11, pip, and virtualenv to be installed."
-
-    # Create venv if needed.
-    if ! python3 -m venv "$VENV_NAME" >/dev/null 2>&1; then
-        echo "Failed to create virtualenv."
-        if command -v apt-get >/dev/null; then
-            echo "Detected Debian/Ubuntu, attempting to install python3-venv."
-            SUDO="sudo"
-            if ! command -v $SUDO >/dev/null; then
-                SUDO=""
-            fi
-            if ! apt info python3-venv >/dev/null 2>&1; then
-                $SUDO apt -qq update >/dev/null
-            fi
-            $SUDO apt install -qqy python3-venv >/dev/null 2>&1
-            if ! python3 -m venv "$VENV_NAME" >/dev/null 2>&1; then
-                echo "$ENV_ERROR" >&2
-                exit 1
-            fi
-        else
-            echo "$ENV_ERROR" >&2
-            exit 1
-        fi
-    fi
-
-    # Install PyTorch with the right index for the platform.
-    if [ "$PLATFORM" = "linux-rocm" ]; then
-        echo "Installing PyTorch with ROCm support..."
-        $PYTHON -m pip install -qq torch torchvision --index-url "$ROCM_INDEX"
-    else
-        echo "Installing PyTorch (standard)..."
-        $PYTHON -m pip install -qq torch torchvision
-    fi
-
-    # Install remaining dependencies.
-    echo "Installing requirements..."
-    $PYTHON -m pip install -r requirements.txt -Uqq
-
-    echo "pip setup complete."
+# Create venv if it doesn't exist.
+if [ ! -d .venv ]; then
+    echo "Creating virtual environment..."
+    uv venv --python "$PYTHON_VERSION"
 fi
+
+# Install PyTorch FIRST with the correct platform index.
+if [ "$PLATFORM" = "linux-rocm" ]; then
+    echo "Installing PyTorch with ROCm support..."
+    uv pip install torch torchvision --index-url "$ROCM_INDEX"
+elif [ "$PLATFORM" = "linux-cpu" ]; then
+    echo "Installing PyTorch (CPU only)..."
+    uv pip install torch torchvision --index-url "$CPU_INDEX"
+else
+    echo "Installing PyTorch (standard — includes MPS on macOS)..."
+    uv pip install torch torchvision
+fi
+
+# Install all other dependencies.
+echo "Installing remaining dependencies..."
+uv pip install -r requirements.txt
+
+# Verify torch version.
+TORCH_VERSION=$(.venv/bin/python -c "import torch; print(torch.__version__)" 2>/dev/null || echo "FAILED")
+echo "Setup complete (platform: $PLATFORM, torch: $TORCH_VERSION)"

@@ -9,6 +9,7 @@ Usage:
 import asyncio
 import io
 import os
+import subprocess
 import time
 
 import numpy as np
@@ -27,7 +28,7 @@ if os.path.exists(env_path):
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k.strip(), v.strip())
 
-ROBOT_ADDRESS = os.environ.get("VIAM_ROBOT_ADDRESS", "computer-demo-main.496koy7yd1.viam.cloud")
+ROBOT_ADDRESS = os.environ.get("VIAM_ROBOT_ADDRESS", "vino2-main.kssbd6djf3.viam.cloud")
 VISION_SERVICE_NAME = os.environ.get("VIAM_VISION_SERVICE", "vision-sam2")
 NUM_FRAMES = 150
 OUTPUT_DIR = "test_vision_output"
@@ -58,11 +59,16 @@ async def main():
     detected_count = 0
     for i in range(NUM_FRAMES):
         t0 = time.time()
-        result = await vision.capture_all_from_camera(
-            "camera-image-dir",
-            return_image=True,
-            return_detections=True,
-        )
+        try:
+            result = await vision.capture_all_from_camera(
+                "",  # use the default camera configured on the module
+                return_image=True,
+                return_detections=True,
+                timeout=60,  # first call may take a while (model loading + propagation)
+            )
+        except Exception as e:
+            print(f"  Frame {i}: ERROR - {e}")
+            continue
         elapsed_ms = (time.time() - t0) * 1000
 
         # Save the image with detection overlay.
@@ -92,8 +98,24 @@ async def main():
                   f"dets: {len(dets)}  total_detected: {detected_count}/{i + 1}")
 
     await robot.close()
+
+    # Build video from annotated frames.
+    video_path = "test_vision_tracked.mp4"
+    print(f"Building video: {video_path}")
+    subprocess.run(
+        [
+            "ffmpeg", "-y", "-framerate", "5",
+            "-i", f"{OUTPUT_DIR}/%d.jpeg",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            video_path,
+        ],
+        capture_output=True,
+    )
+
     print(f"\nDone! {detected_count}/{NUM_FRAMES} frames with detections")
     print(f"Annotated frames saved to {OUTPUT_DIR}/")
+    print(f"Video saved to {video_path}")
 
 
 if __name__ == "__main__":

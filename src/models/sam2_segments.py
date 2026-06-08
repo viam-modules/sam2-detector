@@ -1,0 +1,643 @@
+"""
+SAM2 Segments: combines upstream 2D detections with SAM2 segmentation masks
+and depth-based 3D projection to produce precise object point clouds.
+
+Pipeline: detector bbox → SAM2 mask → depth projection → PointCloudObject
+"""
+
+import io
+import struct
+import threading
+from typing import ClassVar, List, Mapping, Optional, Sequence, Tuple
+
+import numpy as np
+from PIL import Image as PILImage
+from sam2.sam2_image_predictor import SAM2ImagePredictor
+from typing_extensions import Self
+from viam.components.camera import Camera
+from viam.logging import getLogger
+from viam.media.video import ViamImage
+from viam.robot.client import RobotClient
+from viam.rpc.dial import DialOptions
+from viam.proto.app.robot import ComponentConfig
+from viam.proto.common import (
+    Geometry,
+    GeometriesInFrame,
+    Pose,
+    PoseInFrame,
+    PointCloudObject,
+    RectangularPrism,
+    ResourceName,
+    Vector3,
+)
+from viam.proto.service.vision import Classification, Detection, GetPropertiesResponse
+from viam.resource.base import ResourceBase
+from viam.resource.easy_resource import EasyResource
+from viam.resource.types import Model, ModelFamily
+from viam.services.vision import *
+from viam.utils import ValueTypes
+
+# Reuse shared utilities from the sam2 module.
+from models.sam2 import _select_device, _find_bundled_checkpoint, _viam_image_to_numpy, _mask_to_bbox, SAM2_MODEL_ID
+from spatialmath import transform_points_with_pose
+
+LOGGER = getLogger(__name__)
+# Note: Viam SDK logs appear twice in the app — once via the gRPC pipe (shown as "info")
+# and once via stderr (shown as "error"). This is a known SDK behavior.
+# The stderr copy can be ignored; the "info" line is the authoritative one.
+
+# Hard upper bound on per-pixel depth values, in millimeters. uint16 depth
+# sensors encode "no return" as 0 or 65535 and many also report bogus far
+# values when the surface is transparent or specular (cups, blue tape, etc.).
+# Anything beyond this distance is not a real measurement for the indoor
+# RealSense cameras this module targets, and including those samples would
+# pull projected 3D points to nonsensical locations far from the scene.
+MAX_DEPTH_MM = 20000
+
+
+
+
+async def _connect_to_machine() -> Optional[RobotClient]:
+    """Connect to the parent machine using env vars set by viam-server.
+    Returns None if env vars are not set (e.g. running standalone)."""
+    import os as _os
+    host = _os.environ.get("VIAM_MACHINE_FQDN", "")
+    api_key_id = _os.environ.get("VIAM_API_KEY_ID", "")
+    api_key = _os.environ.get("VIAM_API_KEY", "")
+    missing = []
+    if not host:
+        missing.append("VIAM_MACHINE_FQDN")
+    if not api_key_id:
+        missing.append("VIAM_API_KEY_ID")
+    if not api_key:
+        missing.append("VIAM_API_KEY")
+    if missing:
+        LOGGER.warn(
+            f"Frame system unavailable: missing environment variable(s): {', '.join(missing)}. "
+            f"Point clouds will be returned in camera frame instead of world frame."
+        )
+        return None
+    try:
+        client = await RobotClient.at_address(
+            host,
+            RobotClient.Options(
+                dial_options=DialOptions.with_api_key(api_key=api_key, api_key_id=api_key_id),
+            ),
+        )
+        LOGGER.debug(f"Connected to machine at {host} for frame transforms")
+        return client
+    except Exception as e:
+        LOGGER.warn(f"Could not connect to machine for frame transforms: {e}")
+        return None
+
+
+def _load_image_predictor(device: str) -> SAM2ImagePredictor:
+    """Load SAM2 ImagePredictor from the bundled checkpoint."""
+    config_name, ckpt_path = _find_bundled_checkpoint()
+    LOGGER.debug(f"Loading SAM2 ImagePredictor from bundled checkpoint: {ckpt_path}")
+    from sam2.build_sam import build_sam2
+    model = build_sam2(config_name, ckpt_path, device=device)
+    return SAM2ImagePredictor(model)
+
+
+def _depth_image_to_numpy(image: ViamImage) -> np.ndarray:
+    """Convert a Viam depth image to a numpy array (H, W) of depth in mm."""
+    mime = getattr(image, "mime_type", "")
+    data = image.data
+    LOGGER.debug(f"Depth image: mime={mime}, data_len={len(data)}, first_bytes={data[:24].hex() if len(data) >= 24 else data.hex()}")
+
+    if "viam" in str(mime) and "dep" in str(mime):
+        # Viam raw depth format uses bytes_to_depth_array from the SDK.
+        depth_list = image.bytes_to_depth_array()
+        return np.array(depth_list, dtype=np.float64)
+    else:
+        # PNG or other format: decode as 16-bit grayscale.
+        pil = PILImage.open(io.BytesIO(data))
+        LOGGER.debug(f"Depth PIL: mode={pil.mode}, size={pil.size}")
+        return np.array(pil, dtype=np.float64)
+
+
+def _encode_pcd_binary(points_mm: np.ndarray, colors: np.ndarray) -> bytes:
+    """Encode points (N,3) in mm and colors (N,3) uint8 as binary PCD.
+    PCD coordinates are in meters (Viam convention)."""
+    n = len(points_mm)
+    if n == 0:
+        return b""
+
+    header = (
+        f"VERSION .7\n"
+        f"FIELDS x y z rgb\n"
+        f"SIZE 4 4 4 4\n"
+        f"TYPE F F F F\n"
+        f"COUNT 1 1 1 1\n"
+        f"WIDTH {n}\n"
+        f"HEIGHT 1\n"
+        f"VIEWPOINT 0 0 0 1 0 0 0\n"
+        f"POINTS {n}\n"
+        f"DATA binary\n"
+    ).encode("ascii")
+
+    # Convert mm to meters for PCD output.
+    points_m = points_mm / 1000.0
+
+    # Pack points + RGB into binary.
+    buf = bytearray(n * 16)  # 4 floats * 4 bytes each
+    for i in range(n):
+        x, y, z = points_m[i]
+        r, g, b = int(colors[i, 0]), int(colors[i, 1]), int(colors[i, 2])
+        rgb_int = (r << 16) | (g << 8) | b
+        rgb_float = struct.unpack("f", struct.pack("I", rgb_int))[0]
+        struct.pack_into("ffff", buf, i * 16, float(x), float(y), float(z), rgb_float)
+
+    return header + bytes(buf)
+
+
+class Sam2Segments(Vision, EasyResource):
+    """Vision service that combines upstream detections + SAM2 masks + depth → 3D point clouds."""
+
+    MODEL: ClassVar[Model] = Model(ModelFamily("viam", "sam2-detector"), "sam2-segments")
+
+    _predictor: SAM2ImagePredictor
+    _device: str = "cpu"
+    _detector: ResourceBase
+    _camera: ResourceBase
+    _detector_name: str = ""
+    _camera_name: str = ""
+    _label: str = ""
+    _confidence_threshold: float = 0.5
+    _depth_threshold_mm: int = 0
+    _min_points: int = 50
+    _highlighting_on: bool = False
+    _highlight_color: Tuple[int, int, int] = (0, 255, 0)
+    _debug: bool = False
+    _robot_client: Optional[RobotClient] = None
+    _lock: threading.Lock
+
+    @classmethod
+    def new(
+        cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
+    ) -> Self:
+        instance = super().new(config, dependencies)
+        instance._lock = threading.Lock()
+        attrs = config.attributes.fields
+
+        instance._detector_name = attrs["detector_name"].string_value
+        instance._camera_name = attrs["camera_name"].string_value
+
+        # Resolve dependencies.
+        instance._detector = dependencies[Vision.get_resource_name(instance._detector_name)]
+        instance._camera = dependencies[Camera.get_resource_name(instance._camera_name)]
+        LOGGER.debug(f"Using detector: {instance._detector_name}, camera: {instance._camera_name}")
+
+        if "label" in attrs:
+            instance._label = attrs["label"].string_value
+        if "confidence_threshold" in attrs:
+            instance._confidence_threshold = attrs["confidence_threshold"].number_value
+        if "depth_threshold_mm" in attrs:
+            instance._depth_threshold_mm = int(attrs["depth_threshold_mm"].number_value)
+        if "min_points" in attrs:
+            instance._min_points = int(attrs["min_points"].number_value)
+        if "highlighting_on" in attrs:
+            instance._highlighting_on = attrs["highlighting_on"].bool_value
+        if "highlight_color" in attrs:
+            color_fields = attrs["highlight_color"].struct_value.fields
+            instance._highlight_color = (
+                max(0, min(255, int(color_fields["r"].number_value))),
+                max(0, min(255, int(color_fields["g"].number_value))),
+                max(0, min(255, int(color_fields["b"].number_value))),
+            )
+        if "debug" in attrs:
+            instance._debug = attrs["debug"].bool_value
+
+        instance._device = _select_device()
+        LOGGER.debug(f"Loading SAM2 ImagePredictor ({SAM2_MODEL_ID}) on {instance._device}")
+        instance._predictor = _load_image_predictor(instance._device)
+        LOGGER.info("SAM2 ImagePredictor loaded")
+
+        # Connect to the machine for frame transforms (async, done lazily on first use).
+        instance._robot_client = None
+
+        return instance
+
+    @classmethod
+    def validate_config(
+        cls, config: ComponentConfig
+    ) -> Tuple[Sequence[str], Sequence[str]]:
+        attrs = config.attributes.fields
+        if "detector_name" not in attrs or not attrs["detector_name"].string_value:
+            raise ValueError("detector_name is required")
+        if "camera_name" not in attrs or not attrs["camera_name"].string_value:
+            raise ValueError("camera_name is required")
+        return [attrs["detector_name"].string_value, attrs["camera_name"].string_value], []
+
+    # ---- Core pipeline helpers ----
+
+    async def _get_color_and_depth(self) -> Tuple[ViamImage, np.ndarray, np.ndarray]:
+        """Get color and depth images from camera. Returns (color_viam, color_np, depth_np)."""
+        images, _ = await self._camera.get_images()
+        color_img = None
+        depth_img = None
+        for img in images:
+            name = getattr(img, "name", "") or getattr(img, "source_name", "") or ""
+            if "color" in name.lower() or "rgb" in name.lower():
+                color_img = img
+            elif "depth" in name.lower():
+                depth_img = img
+        # Fallback: first is color, second is depth.
+        if color_img is None and len(images) >= 1:
+            color_img = images[0]
+        if depth_img is None and len(images) >= 2:
+            depth_img = images[1]
+        if color_img is None or depth_img is None:
+            raise ValueError("Camera must return both color and depth images")
+
+        color_np = _viam_image_to_numpy(color_img)
+        depth_np = _depth_image_to_numpy(depth_img)
+        return color_img, color_np, depth_np
+
+    async def _get_filtered_detections(self, image: ViamImage) -> List[Detection]:
+        """Call upstream detector and filter by label/confidence."""
+        detections = await self._detector.get_detections(image)
+        filtered = []
+        for det in detections:
+            if det.confidence < self._confidence_threshold:
+                continue
+            if self._label and det.class_name != self._label:
+                continue
+            filtered.append(det)
+        return filtered
+
+    def _sam2_refine(self, color_np: np.ndarray, bbox: Tuple[int, int, int, int]) -> Optional[np.ndarray]:
+        """Use SAM2 to get a precise mask from a bounding box prompt."""
+        with self._lock:
+            self._predictor.set_image(color_np)
+            box = np.array(list(bbox), dtype=np.float32)
+            masks, scores, _ = self._predictor.predict(
+                box=box, multimask_output=False
+            )
+            mask = masks[0].astype(bool)
+            if not mask.any():
+                return None
+            return mask
+
+    def _overlay_masks(self, image: ViamImage, masks: List[Tuple[np.ndarray, Detection]]) -> ViamImage:
+        """Overlay SAM2 segmentation masks on the image with 50% green highlighting."""
+        from viam.media.video import CameraMimeType
+
+        color_np = _viam_image_to_numpy(image)
+        overlay = color_np.copy()
+        color = np.array(self._highlight_color, dtype=np.uint8)
+        for mask, det in masks:
+            bool_mask = mask.astype(bool)
+            overlay[bool_mask] = (overlay[bool_mask].astype(np.float32) * 0.5 + color * 0.5).astype(np.uint8)
+
+        pil = PILImage.fromarray(overlay)
+        buf = io.BytesIO()
+        pil.save(buf, format="JPEG", quality=90)
+        return ViamImage(buf.getvalue(), CameraMimeType.JPEG)
+
+    def _mask_to_points_raw(
+        self,
+        mask: np.ndarray,
+        color_np: np.ndarray,
+        depth_np: np.ndarray,
+        fx: float, fy: float, ppx: float, ppy: float,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Project masked pixels to 3D using pinhole camera model, with only basic
+        valid-depth filtering applied (no median-based outlier cleaning).
+        Returns (points, colors) — the "before cleaning" point cloud."""
+        vs, us = np.where(mask)
+        depths = depth_np[vs, us].astype(np.float64)
+
+        # Filter zero-depth and out-of-range pixels. See MAX_DEPTH_MM
+        # (defined at the top of this module) for why the upper bound exists.
+        valid = (depths > 0) & (depths < MAX_DEPTH_MM)
+        vs, us, depths = vs[valid], us[valid], depths[valid]
+        if len(depths) == 0:
+            return np.empty((0, 3)), np.empty((0, 3), dtype=np.uint8)
+
+        # Pinhole projection: pixel (u, v, Z) → 3D (X, Y, Z).
+        xs = (us.astype(np.float64) - ppx) * depths / fx
+        ys = (vs.astype(np.float64) - ppy) * depths / fy
+        zs = depths
+
+        points = np.stack([xs, ys, zs], axis=1)
+        colors = color_np[vs, us]  # (N, 3) uint8
+
+        return points, colors
+
+    def _clean_points(
+        self, points: np.ndarray, colors: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """Apply median ± depth_threshold_mm outlier removal on Z."""
+        if self._depth_threshold_mm <= 0 or len(points) == 0:
+            return points, colors
+        depths = points[:, 2]
+        median = np.median(depths)
+        within = np.abs(depths - median) <= self._depth_threshold_mm
+        return points[within], colors[within]
+
+    def _build_point_cloud_object(
+        self, points: np.ndarray, colors: np.ndarray, label: str, ref_frame: str = ""
+    ) -> PointCloudObject:
+        """Create a PointCloudObject from 3D points (mm) and colors."""
+        pcd_bytes = _encode_pcd_binary(points, colors)
+
+        # Compute bounding box geometry (in mm).
+        mins = points.min(axis=0)
+        maxs = points.max(axis=0)
+        center = (mins + maxs) / 2.0
+        dims = maxs - mins
+
+        geometry = Geometry(
+            center=Pose(
+                x=float(center[0]), y=float(center[1]), z=float(center[2]),
+                o_x=0, o_y=0, o_z=1, theta=0,
+            ),
+            box=RectangularPrism(dims_mm=Vector3(
+                x=float(dims[0]), y=float(dims[1]), z=float(dims[2]),
+            )),
+            label=label,
+        )
+
+        return PointCloudObject(
+            point_cloud=pcd_bytes,
+            geometries=GeometriesInFrame(
+                reference_frame=ref_frame,
+                geometries=[geometry],
+            ),
+        )
+
+    async def _ensure_robot_client(self):
+        """Lazily connect to the parent machine for frame transforms."""
+        if self._robot_client is None:
+            self._robot_client = await _connect_to_machine()
+        return self._robot_client
+
+    async def _transform_points_to_world(self, points_mm: np.ndarray) -> Tuple[np.ndarray, str]:
+        """Transform points from camera frame to world frame.
+        Uses Viam's rust utils for OV→quaternion→rotation, matching the Go RDK exactly.
+        Points are in mm. Returns (points_mm, reference_frame)."""
+        client = await self._ensure_robot_client()
+        if client is None:
+            return points_mm, self._camera_name
+
+        try:
+            # Get camera-to-world pose via transform_pose.
+            origin = PoseInFrame(
+                reference_frame=self._camera_name,
+                pose=Pose(x=0, y=0, z=0, o_x=0, o_y=0, o_z=1, theta=0),
+            )
+            world_pose_in_frame = await client.transform_pose(origin, "world")
+            p = world_pose_in_frame.pose
+
+            LOGGER.debug(
+                f"Frame transform {self._camera_name} -> world: "
+                f"translation=({p.x:.1f},{p.y:.1f},{p.z:.1f})mm "
+                f"OV=({p.o_x:.4f},{p.o_y:.4f},{p.o_z:.4f}) theta={p.theta:.4f}"
+            )
+
+            # Use Viam rust utils for the transform (same math as Go RDK).
+            transformed = transform_points_with_pose(
+                p.o_x, p.o_y, p.o_z, p.theta,
+                p.x, p.y, p.z,
+                points_mm,
+            )
+            LOGGER.debug(f"Transformed {len(points_mm)} points to world frame")
+            return transformed, "world"
+
+        except Exception as e:
+            LOGGER.warn(f"Could not transform to world frame: {e}")
+            return points_mm, self._camera_name
+
+    # ---- Vision service API ----
+
+    async def get_object_point_clouds(
+        self,
+        camera_name: str,
+        *,
+        extra: Optional[Mapping[str, ValueTypes]] = None,
+        timeout: Optional[float] = None,
+    ) -> List[PointCloudObject]:
+        # Get camera intrinsics.
+        props = await self._camera.get_properties()
+        intrinsics = props.intrinsic_parameters
+        if intrinsics is None:
+            raise ValueError("Camera must provide intrinsic parameters for 3D projection")
+        fx = intrinsics.focal_x_px
+        fy = intrinsics.focal_y_px
+        ppx = intrinsics.center_x_px
+        ppy = intrinsics.center_y_px
+        LOGGER.debug(f"Intrinsics: fx={fx}, fy={fy}, ppx={ppx}, ppy={ppy}")
+
+        # Get color + depth images.
+        color_viam, color_np, depth_np = await self._get_color_and_depth()
+
+        # Get upstream detections.
+        detections = await self._get_filtered_detections(color_viam)
+        LOGGER.debug(f"Got {len(detections)} filtered detections")
+
+        results = []
+        for det in detections:
+            bbox = (det.x_min, det.y_min, det.x_max, det.y_max)
+
+            # SAM2 refine: bbox → precise mask.
+            mask = self._sam2_refine(color_np, bbox)
+            if mask is None:
+                LOGGER.debug(f"SAM2 returned empty mask for bbox {bbox}")
+                continue
+
+            # Project masked pixels to 3D (pre-cleaning), then apply outlier removal.
+            points_raw, colors_raw = self._mask_to_points_raw(
+                mask, color_np, depth_np, fx, fy, ppx, ppy
+            )
+            points, colors = self._clean_points(points_raw, colors_raw)
+            if len(points) < self._min_points:
+                LOGGER.debug(f"Skipping segment with {len(points)} points (min={self._min_points})")
+                continue
+
+            label = det.class_name or self._label or "object"
+
+            cam_center = points.mean(axis=0)
+            LOGGER.debug(
+                f"Segment '{label}': {len(points)} pts, "
+                f"camera frame center=({cam_center[0]:.0f},{cam_center[1]:.0f},{cam_center[2]:.0f})mm"
+            )
+
+            # Transform to world frame if possible.
+            points, ref_frame = await self._transform_points_to_world(points)
+
+            world_center = points.mean(axis=0)
+            LOGGER.debug(
+                f"  -> {ref_frame} frame center=({world_center[0]:.0f},{world_center[1]:.0f},{world_center[2]:.0f})mm"
+            )
+
+            pco = self._build_point_cloud_object(points, colors, label, ref_frame)
+            results.append(pco)
+
+            if self._debug:
+                points_raw_world, raw_ref_frame = await self._transform_points_to_world(points_raw)
+                debug_pco = self._build_point_cloud_object(
+                    points_raw_world, colors_raw, f"debug_{label}_before_cleaning", raw_ref_frame,
+                )
+                results.append(debug_pco)
+
+        LOGGER.debug(f"Returning {len(results)} point cloud objects")
+        return results
+
+    async def _get_sam2_refined_detections(self, image: ViamImage) -> List[Detection]:
+        """Get upstream detections refined by SAM2: bounding boxes are from the mask, not the detector."""
+        color_np = _viam_image_to_numpy(image)
+        upstream = await self._get_filtered_detections(image)
+        LOGGER.debug(f"Refining {len(upstream)} upstream detections with SAM2")
+        refined = []
+        for det in upstream:
+            det_bbox = (det.x_min, det.y_min, det.x_max, det.y_max)
+            mask = self._sam2_refine(color_np, det_bbox)
+            if mask is None:
+                LOGGER.debug(f"SAM2 returned empty mask for detector bbox {det_bbox}")
+                continue
+            mask_bbox = _mask_to_bbox(mask)
+            if mask_bbox is None:
+                continue
+            x_min, y_min, x_max, y_max = mask_bbox
+            LOGGER.debug(
+                f"Detection refined: detector bbox=({det_bbox[0]},{det_bbox[1]},{det_bbox[2]},{det_bbox[3]}) "
+                f"-> SAM2 mask bbox=({x_min},{y_min},{x_max},{y_max}) "
+                f"label={det.class_name!r} conf={det.confidence:.2f}"
+            )
+            refined.append(Detection(
+                x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max,
+                confidence=det.confidence,
+                class_name=det.class_name,
+            ))
+        return refined
+
+    async def get_detections(
+        self,
+        image: ViamImage,
+        *,
+        extra: Optional[Mapping[str, ValueTypes]] = None,
+        timeout: Optional[float] = None,
+    ) -> List[Detection]:
+        """Return detections with SAM2-refined bounding boxes (mask outline, not detector bbox)."""
+        return await self._get_sam2_refined_detections(image)
+
+    async def get_detections_from_camera(
+        self,
+        camera_name: str,
+        *,
+        extra: Optional[Mapping[str, ValueTypes]] = None,
+        timeout: Optional[float] = None,
+    ) -> List[Detection]:
+        """Get SAM2-refined detections using the configured camera."""
+        images, _ = await self._camera.get_images()
+        if not images:
+            return []
+        return await self._get_sam2_refined_detections(images[0])
+
+    async def capture_all_from_camera(
+        self,
+        camera_name: str,
+        return_image: bool = False,
+        return_classifications: bool = False,
+        return_detections: bool = False,
+        return_object_point_clouds: bool = False,
+        *,
+        extra: Optional[Mapping[str, ValueTypes]] = None,
+        timeout: Optional[float] = None,
+    ) -> CaptureAllResult:
+        if camera_name not in (self._camera_name, ""):
+            raise ValueError(
+                f"Camera name '{camera_name}' does not match configured camera '{self._camera_name}'."
+            )
+
+        result = CaptureAllResult()
+        images, _ = await self._camera.get_images()
+        if not images:
+            return result
+
+        color_viam = images[0]
+
+        # If highlighting is on, we need the masks to overlay on the image.
+        masks = []
+        if self._highlighting_on and (return_image or return_detections):
+            color_np = _viam_image_to_numpy(color_viam)
+            upstream = await self._get_filtered_detections(color_viam)
+            for det in upstream:
+                bbox = (det.x_min, det.y_min, det.x_max, det.y_max)
+                mask = self._sam2_refine(color_np, bbox)
+                if mask is not None:
+                    masks.append((mask, det))
+
+        if return_image:
+            if self._highlighting_on and masks:
+                result.image = self._overlay_masks(color_viam, masks)
+            else:
+                result.image = color_viam
+
+        if return_detections:
+            if masks:
+                # We already have the masks; extract refined bboxes from them.
+                result.detections = []
+                for mask, det in masks:
+                    mask_bbox = _mask_to_bbox(mask)
+                    if mask_bbox:
+                        x_min, y_min, x_max, y_max = mask_bbox
+                        result.detections.append(Detection(
+                            x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max,
+                            confidence=det.confidence, class_name=det.class_name,
+                        ))
+            else:
+                result.detections = await self._get_sam2_refined_detections(color_viam)
+
+        if return_object_point_clouds:
+            result.objects = await self.get_object_point_clouds(
+                camera_name, extra=extra, timeout=timeout
+            )
+
+        return result
+
+    async def get_classifications_from_camera(
+        self, camera_name: str, count: int, *, extra=None, timeout=None
+    ) -> List[Classification]:
+        raise NotImplementedError("classifications not supported")
+
+    async def get_classifications(
+        self, image: ViamImage, count: int, *, extra=None, timeout=None
+    ) -> List[Classification]:
+        raise NotImplementedError("classifications not supported")
+
+    async def get_properties(self, *, extra=None, timeout=None) -> Vision.Properties:
+        return GetPropertiesResponse(
+            classifications_supported=False,
+            detections_supported=True,
+            object_point_clouds_supported=True,
+        )
+
+    async def close(self):
+        if self._robot_client is not None:
+            await self._robot_client.close()
+            self._robot_client = None
+        LOGGER.info("Sam2Segments shut down")
+
+    async def do_command(
+        self,
+        command: Mapping[str, ValueTypes],
+        *,
+        timeout: Optional[float] = None,
+        **kwargs,
+    ) -> Mapping[str, ValueTypes]:
+        cmd = command.get("command", "")
+        if cmd == "status":
+            return {
+                "detector_name": self._detector_name,
+                "camera_name": self._camera_name,
+                "label": self._label,
+                "confidence_threshold": self._confidence_threshold,
+                "model_name": SAM2_MODEL_ID,
+                "device": self._device,
+                "depth_threshold_mm": float(self._depth_threshold_mm),
+                "min_points": float(self._min_points),
+            }
+        return {"error": f"unknown command: {cmd}"}

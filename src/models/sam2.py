@@ -6,6 +6,11 @@ import tempfile
 import threading
 from typing import ClassVar, Dict, List, Mapping, Optional, Sequence, Tuple
 
+# Set HSA_OVERRIDE_GFX_VERSION before torch is imported — required for AMD GPUs
+# not yet in PyTorch's official ROCm support list. Must happen before any torch import.
+if os.path.exists("/opt/rocm") and "HSA_OVERRIDE_GFX_VERSION" not in os.environ:
+    os.environ["HSA_OVERRIDE_GFX_VERSION"] = "10.3.0"
+
 # Disable tqdm progress bars before any other imports — SAM2 uses tqdm internally
 # and the output goes to stderr, which Viam logs as errors.
 import tqdm as _tqdm_module
@@ -65,45 +70,49 @@ OBJ_ID = 1
 # Max frames to keep in the sliding window. Older frames are discarded.
 DEFAULT_MAX_FRAMES = 300
 
+# Bundled model. The build script downloads this checkpoint into
+# checkpoints/ and packages it inside the module tarball. There is no
+# config knob to change it: callers always get this exact model.
+SAM2_MODEL_ID = "facebook/sam2.1-hiera-tiny"
+
 
 def _select_device() -> str:
     if torch.cuda.is_available():
+        device_name = torch.cuda.get_device_name(0)
+        LOGGER.debug(f"Using CUDA GPU: {device_name}")
         return "cuda"
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        LOGGER.debug("Using Apple MPS (Metal Performance Shaders)")
         return "mps"
+    LOGGER.debug("No GPU detected, using CPU")
     return "cpu"
 
 
-def _find_bundled_checkpoint(model_name: str) -> Optional[Tuple[str, str]]:
-    """Check if a checkpoint is bundled alongside the module binary."""
-    if model_name not in HF_MODEL_ID_TO_FILENAMES:
-        return None
-    config_name, ckpt_filename = HF_MODEL_ID_TO_FILENAMES[model_name]
-    # Look relative to this file, then relative to the executable.
+def _find_bundled_checkpoint() -> Tuple[str, str]:
+    """Locate the bundled SAM2 checkpoint shipped with the module. Raises if missing."""
+    config_name, ckpt_filename = HF_MODEL_ID_TO_FILENAMES[SAM2_MODEL_ID]
     search_dirs = [
         os.path.dirname(os.path.abspath(__file__)),  # src/models/
         os.path.dirname(os.path.abspath(__file__)) + "/../..",  # sam2-detector/
         os.getcwd(),
     ]
-    # Also check for a BUNDLE_DIR env var (set by PyInstaller via --runtime-tmpdir or similar).
     if hasattr(sys, "_MEIPASS"):
         search_dirs.insert(0, sys._MEIPASS)
     for d in search_dirs:
         path = os.path.join(d, "checkpoints", ckpt_filename)
         if os.path.isfile(path):
             return config_name, path
-    return None
+    raise FileNotFoundError(
+        f"Bundled SAM2 checkpoint {ckpt_filename} not found in any of: "
+        f"{[os.path.join(d, 'checkpoints') for d in search_dirs]}"
+    )
 
 
-def _load_predictor(model_name: str, device: str) -> SAM2VideoPredictor:
-    """Load SAM2 VideoPredictor, preferring a bundled checkpoint over HuggingFace download."""
-    bundled = _find_bundled_checkpoint(model_name)
-    if bundled is not None:
-        config_name, ckpt_path = bundled
-        LOGGER.info(f"Loading from bundled checkpoint: {ckpt_path}")
-        return build_sam2_video_predictor(config_name, ckpt_path, device=device)
-    LOGGER.info(f"No bundled checkpoint found, downloading from HuggingFace: {model_name}")
-    return SAM2VideoPredictor.from_pretrained(model_name, device=device)
+def _load_predictor(device: str) -> SAM2VideoPredictor:
+    """Load SAM2 VideoPredictor from the bundled checkpoint."""
+    config_name, ckpt_path = _find_bundled_checkpoint()
+    LOGGER.debug(f"Loading SAM2 VideoPredictor from bundled checkpoint: {ckpt_path}")
+    return build_sam2_video_predictor(config_name, ckpt_path, device=device)
 
 
 def _mask_to_bbox(mask: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
@@ -123,14 +132,13 @@ def _viam_image_to_numpy(image: ViamImage) -> np.ndarray:
 class Sam2(Vision, EasyResource):
     MODEL: ClassVar[Model] = Model(ModelFamily("viam", "sam2-detector"), "sam2")
 
-    _predictor: Optional[SAM2VideoPredictor] = None
+    _predictor: SAM2VideoPredictor
     _device: str = "cpu"
     _initial_point: Optional[Tuple[int, int]] = None
     _label: str = "object"
-    _model_name: str = "facebook/sam2.1-hiera-tiny"
     _max_frames: int = DEFAULT_MAX_FRAMES
     _camera_name: str = ""
-    _camera: Optional[ResourceBase] = None
+    _camera: ResourceBase
 
     # Sliding window of frames stored as numbered JPEGs in a temp dir.
     # Only the most recent _max_frames are kept.
@@ -161,22 +169,20 @@ class Sam2(Vision, EasyResource):
         instance._camera_name = attrs["camera_name"].string_value
         from viam.components.camera import Camera
         instance._camera = dependencies[Camera.get_resource_name(instance._camera_name)]
-        LOGGER.info(f"Using camera: {instance._camera_name}")
+        LOGGER.debug(f"Using camera: {instance._camera_name}")
 
         if "initial_point_x" in attrs and "initial_point_y" in attrs:
             instance._initial_point = (
                 int(attrs["initial_point_x"].number_value),
                 int(attrs["initial_point_y"].number_value),
             )
-            LOGGER.info(f"Initial point: {instance._initial_point}")
+            LOGGER.debug(f"Initial point: {instance._initial_point}")
         else:
             instance._initial_point = None
             LOGGER.warn("No initial point configured; tracking will not start until set_point is called")
 
         if "label" in attrs:
             instance._label = attrs["label"].string_value
-        if "model_name" in attrs:
-            instance._model_name = attrs["model_name"].string_value
         if "propagation_interval" in attrs:
             instance._propagation_interval = int(attrs["propagation_interval"].number_value)
         if "max_frames" in attrs:
@@ -188,8 +194,8 @@ class Sam2(Vision, EasyResource):
         instance._frame_dir = tempfile.mkdtemp(prefix="sam2_frames_")
 
         instance._device = _select_device()
-        LOGGER.info(f"Loading SAM2 model {instance._model_name} on {instance._device}")
-        instance._predictor = _load_predictor(instance._model_name, instance._device)
+        LOGGER.debug(f"Loading SAM2 model {SAM2_MODEL_ID} on {instance._device}")
+        instance._predictor = _load_predictor(instance._device)
         LOGGER.info("SAM2 model loaded")
         return instance
 
@@ -412,6 +418,13 @@ class Sam2(Vision, EasyResource):
             object_point_clouds_supported=False,
         )
 
+    async def close(self):
+        """Clean up temp files on shutdown."""
+        if self._frame_dir and os.path.isdir(self._frame_dir):
+            shutil.rmtree(self._frame_dir, ignore_errors=True)
+            LOGGER.debug(f"Cleaned up frame directory: {self._frame_dir}")
+        self._frame_dir = None
+
     async def do_command(
         self,
         command: Mapping[str, ValueTypes],
@@ -458,7 +471,7 @@ class Sam2(Vision, EasyResource):
                 "max_frames": float(self._max_frames),
                 "detections_cached": float(len(self._detections)),
                 "device": self._device,
-                "model_name": self._model_name,
+                "model_name": SAM2_MODEL_ID,
                 "propagation_interval": float(self._propagation_interval),
             }
 

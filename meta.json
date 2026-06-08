@@ -9,11 +9,16 @@
       "api": "rdk:service:vision",
       "model": "viam:sam2-detector:sam2",
       "markdown_link": "viam_sam2-detector_sam2.md"
+    },
+    {
+      "api": "rdk:service:vision",
+      "model": "viam:sam2-detector:sam2-segments",
+      "markdown_link": "viam_sam2-detector_sam2-segments.md"
     }
   ],
   "applications": null,
   "markdown_link": "README.md",
-  "entrypoint": "dist/main",
+  "entrypoint": "run.sh",
   "first_run": "",
   "build": {
     "build": "./build.sh",
