@@ -10,6 +10,10 @@
 #   make module                          # Build binary, download checkpoint, create tarball
 #   make module SAM2_MODEL=facebook/sam2.1-hiera-small  # Use a different model
 #   make clean                           # Remove all build artifacts
+#
+# The build target (GPU runtime and packaging mode) is detected by
+# detect_target.sh. Override it with SAM2_BUILD_TARGET, e.g.:
+#   make module SAM2_BUILD_TARGET=linux-cpu   # skip the ~5GB CUDA bundle
 
 .PHONY: clean module
 

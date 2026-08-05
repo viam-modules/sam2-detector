@@ -18,20 +18,25 @@ jobs:
             exit 1
           fi
 
-  # Build and upload three platform variants (sequentially to avoid race conditions).
+  # Build and upload the platform variants (sequentially to avoid race conditions).
+  #
+  # The build target is NOT passed as an env var here: these are Viam cloud builds,
+  # which run on Viam's infrastructure from the git ref, so env vars set in this
+  # workflow never reach the builder. detect_target.sh derives the target from the
+  # build machine instead — linux/amd64 resolves to the CUDA build, darwin/arm64
+  # to the standard MPS build.
   publish:
     needs: validate-tag
     strategy:
       max-parallel: 1
       matrix:
-        include:
-          # macOS Apple Silicon — onefile, standard torch (MPS)
-          - platform: darwin/arm64
-            build_target: darwin
-          # Linux CPU — onefile, CPU-only torch
-          - platform: linux/amd64
-            build_target: linux-cpu
-    name: "Build (${{ matrix.build_target }})"
+        platform:
+          # macOS Apple Silicon — onefile, standard torch (MPS).
+          - darwin/arm64
+          # Linux x86_64 — onedir, CUDA 12.8 torch. Uses an NVIDIA GPU when a
+          # driver is present and falls back to CPU otherwise.
+          - linux/amd64
+    name: "Build (${{ matrix.platform }})"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -46,5 +51,3 @@ jobs:
           key-value: ${{ secrets.viam_key_value }}
           token: ${{ github.token }}
           platform: ${{ matrix.platform }}
-        env:
-          SAM2_BUILD_TARGET: ${{ matrix.build_target }}

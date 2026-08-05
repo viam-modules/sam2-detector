@@ -76,15 +76,58 @@ DEFAULT_MAX_FRAMES = 300
 SAM2_MODEL_ID = "facebook/sam2.1-hiera-tiny"
 
 
+def torch_build_info() -> Dict[str, str]:
+    """Describe the bundled torch build. Useful for diagnosing CPU fallback remotely."""
+    hip_version = getattr(torch.version, "hip", None)
+    if hip_version:
+        gpu_support = f"rocm-{hip_version}"
+    elif torch.version.cuda:
+        gpu_support = f"cuda-{torch.version.cuda}"
+    else:
+        gpu_support = "none (CPU-only build)"
+    return {"torch_version": torch.__version__, "torch_gpu_support": gpu_support}
+
+
+def _cpu_fallback_reason() -> str:
+    """Explain why no GPU was selected, distinguishing a CPU-only build from a
+    GPU-capable build that could not reach a device."""
+    if not torch.version.cuda and not getattr(torch.version, "hip", None):
+        return (
+            "this build of torch has no GPU support compiled in (CPU-only wheel), "
+            "so no GPU can be used regardless of the installed hardware"
+        )
+    vendor = "ROCm" if getattr(torch.version, "hip", None) else "CUDA"
+    try:
+        count = torch.cuda.device_count()
+    except Exception as err:  # pragma: no cover - depends on driver state
+        return f"{vendor} runtime is bundled but querying devices failed: {err}"
+    if count == 0:
+        return (
+            f"{vendor} runtime is bundled but no device is visible — check that the "
+            f"GPU driver is installed and loaded, that the module's user can access "
+            f"the device nodes, and that CUDA_VISIBLE_DEVICES is not restricting it"
+        )
+    return f"{vendor} reports {count} device(s) but torch considers none usable"
+
+
 def _select_device() -> str:
+    build = torch_build_info()
     if torch.cuda.is_available():
-        device_name = torch.cuda.get_device_name(0)
-        LOGGER.debug(f"Using CUDA GPU: {device_name}")
+        # torch.cuda covers ROCm too; HIP builds report AMD cards through this API.
+        LOGGER.info(
+            f"Using GPU: {torch.cuda.get_device_name(0)} "
+            f"(torch {build['torch_version']}, {build['torch_gpu_support']})"
+        )
         return "cuda"
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        LOGGER.debug("Using Apple MPS (Metal Performance Shaders)")
+        LOGGER.info(f"Using Apple MPS (torch {build['torch_version']})")
         return "mps"
-    LOGGER.debug("No GPU detected, using CPU")
+    # Warn rather than debug: running SAM2 on CPU is roughly an order of magnitude
+    # slower, and the previous silent fallback made it easy to miss entirely.
+    LOGGER.warning(
+        f"Falling back to CPU inference — {_cpu_fallback_reason()}. "
+        f"(torch {build['torch_version']}, {build['torch_gpu_support']})"
+    )
     return "cpu"
 
 
@@ -473,6 +516,7 @@ class Sam2(Vision, EasyResource):
                 "device": self._device,
                 "model_name": SAM2_MODEL_ID,
                 "propagation_interval": float(self._propagation_interval),
+                **torch_build_info(),
             }
 
         return {"error": f"unknown command: {cmd}"}
