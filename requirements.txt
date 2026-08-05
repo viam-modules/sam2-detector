@@ -5,5 +5,6 @@ pillow
 huggingface-hub
 pyinstaller
 sam-2 @ git+https://github.com/facebookresearch/sam2.git
-# torch and torchvision are installed separately by setup.sh
-# with the correct platform-specific index URL (PyPI vs ROCm).
+# torch and torchvision are installed separately by setup.sh with the correct
+# platform-specific index URL (PyPI, CPU, CUDA, or ROCm). Listing them here
+# would let a resolve replace a GPU wheel with the CPU one from PyPI.

@@ -14,5 +14,6 @@ dependencies = [
     "pyinstaller>=6.19.0",
 ]
 # NOTE: torch and torchvision are installed by setup.sh with the correct
-# platform-specific index (standard PyPI for macOS, ROCm for AMD GPUs).
+# platform-specific index (standard PyPI for macOS, CUDA for NVIDIA GPUs,
+# ROCm for AMD GPUs, CPU otherwise).
 # They are intentionally excluded here so uv sync doesn't overwrite them.

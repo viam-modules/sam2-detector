@@ -38,7 +38,7 @@ from viam.services.vision import *
 from viam.utils import ValueTypes
 
 # Reuse shared utilities from the sam2 module.
-from models.sam2 import _select_device, _find_bundled_checkpoint, _viam_image_to_numpy, _mask_to_bbox, SAM2_MODEL_ID
+from models.sam2 import _select_device, _find_bundled_checkpoint, _viam_image_to_numpy, _mask_to_bbox, SAM2_MODEL_ID, torch_build_info
 from spatialmath import transform_points_with_pose
 
 LOGGER = getLogger(__name__)
@@ -639,5 +639,6 @@ class Sam2Segments(Vision, EasyResource):
                 "device": self._device,
                 "depth_threshold_mm": float(self._depth_threshold_mm),
                 "min_points": float(self._min_points),
+                **torch_build_info(),
             }
         return {"error": f"unknown command: {cmd}"}
