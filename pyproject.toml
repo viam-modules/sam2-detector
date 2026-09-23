@@ -5,7 +5,7 @@ description = "Viam vision module using Meta SAM2 for single-object segmentation
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-    "viam-sdk==0.80.0",
+    "viam-sdk==0.82.0",
     "typing-extensions",
     "numpy",
     "pillow",
