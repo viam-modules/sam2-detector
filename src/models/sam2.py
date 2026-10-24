@@ -52,14 +52,14 @@ warnings.filterwarnings("ignore", message="cannot import name '_C' from 'sam2'")
 import numpy as np
 import torch
 from PIL import Image as PILImage
-from sam2.build_sam import build_sam2_video_predictor, HF_MODEL_ID_TO_FILENAMES
+from sam2.build_sam import HF_MODEL_ID_TO_FILENAMES, build_sam2_video_predictor
 from sam2.sam2_video_predictor import SAM2VideoPredictor
 from typing_extensions import Self
+from viam.logging import getLogger
 from viam.media.video import ViamImage
 from viam.proto.app.robot import ComponentConfig
 from viam.proto.common import PointCloudObject, ResourceName
 from viam.proto.service.vision import Classification, Detection, GetPropertiesResponse
-from viam.logging import getLogger
 from viam.resource.base import ResourceBase
 from viam.resource.easy_resource import EasyResource
 from viam.resource.types import Model, ModelFamily

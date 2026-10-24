@@ -17,11 +17,11 @@ import time
 
 import numpy as np
 import torch
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 from sam2.sam2_video_predictor import SAM2VideoPredictor
+from viam.components.camera import Camera
 from viam.robot.client import RobotClient
 from viam.rpc.dial import DialOptions
-from viam.components.camera import Camera
 
 # Load env vars from viam.env if it exists.
 env_path = os.path.join(os.path.dirname(__file__), "..", "viam.env")
@@ -225,7 +225,7 @@ async def main():
         capture_output=True,
     )
 
-    print(f"\nDone!")
+    print("\nDone!")
     print(f"  Raw frames:      {RAW_DIR}/")
     print(f"  Annotated frames: {OUTPUT_DIR}/")
     print(f"  Tracked video:    {video_path}")

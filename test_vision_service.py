@@ -12,7 +12,6 @@ import os
 import subprocess
 import time
 
-import numpy as np
 from PIL import Image, ImageDraw
 from viam.robot.client import RobotClient
 from viam.rpc.dial import DialOptions

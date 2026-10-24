@@ -17,15 +17,13 @@ from typing_extensions import Self
 from viam.components.camera import Camera
 from viam.logging import getLogger
 from viam.media.video import ViamImage
-from viam.robot.client import RobotClient
-from viam.rpc.dial import DialOptions
 from viam.proto.app.robot import ComponentConfig
 from viam.proto.common import (
-    Geometry,
     GeometriesInFrame,
+    Geometry,
+    PointCloudObject,
     Pose,
     PoseInFrame,
-    PointCloudObject,
     RectangularPrism,
     ResourceName,
     Vector3,
@@ -34,16 +32,18 @@ from viam.proto.service.vision import Classification, Detection, GetPropertiesRe
 from viam.resource.base import ResourceBase
 from viam.resource.easy_resource import EasyResource
 from viam.resource.types import Model, ModelFamily
+from viam.robot.client import RobotClient
+from viam.rpc.dial import DialOptions
 from viam.services.vision import *
 from viam.utils import ValueTypes
 
 # Reuse shared utilities from the sam2 module.
 from models.sam2 import (
-    _select_device,
-    _find_bundled_checkpoint,
-    _viam_image_to_numpy,
-    _mask_to_bbox,
     SAM2_MODEL_ID,
+    _find_bundled_checkpoint,
+    _mask_to_bbox,
+    _select_device,
+    _viam_image_to_numpy,
     torch_build_info,
 )
 from spatialmath import transform_points_with_pose
