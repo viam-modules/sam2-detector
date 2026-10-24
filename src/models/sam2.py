@@ -45,26 +45,28 @@ class _SilentTqdm:
 _tqdm_module.tqdm = _SilentTqdm
 _tqdm_auto_module.tqdm = _SilentTqdm
 
-import warnings
+# SAM2 binds tqdm at import time and torch reads HSA_OVERRIDE_GFX_VERSION, so
+# these imports must stay below the setup above.
+import warnings  # noqa: E402
 
 warnings.filterwarnings("ignore", message="cannot import name '_C' from 'sam2'")
 
-import numpy as np
-import torch
-from PIL import Image as PILImage
-from sam2.build_sam import HF_MODEL_ID_TO_FILENAMES, build_sam2_video_predictor
-from sam2.sam2_video_predictor import SAM2VideoPredictor
-from typing_extensions import Self
-from viam.logging import getLogger
-from viam.media.video import ViamImage
-from viam.proto.app.robot import ComponentConfig
-from viam.proto.common import PointCloudObject, ResourceName
-from viam.proto.service.vision import Classification, Detection, GetPropertiesResponse
-from viam.resource.base import ResourceBase
-from viam.resource.easy_resource import EasyResource
-from viam.resource.types import Model, ModelFamily
-from viam.services.vision import *
-from viam.utils import ValueTypes
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
+from PIL import Image as PILImage  # noqa: E402
+from sam2.build_sam import HF_MODEL_ID_TO_FILENAMES, build_sam2_video_predictor  # noqa: E402
+from sam2.sam2_video_predictor import SAM2VideoPredictor  # noqa: E402
+from typing_extensions import Self  # noqa: E402
+from viam.logging import getLogger  # noqa: E402
+from viam.media.video import ViamImage  # noqa: E402
+from viam.proto.app.robot import ComponentConfig  # noqa: E402
+from viam.proto.common import PointCloudObject, ResourceName  # noqa: E402
+from viam.proto.service.vision import Classification, Detection, GetPropertiesResponse  # noqa: E402
+from viam.resource.base import ResourceBase  # noqa: E402
+from viam.resource.easy_resource import EasyResource  # noqa: E402
+from viam.resource.types import Model, ModelFamily  # noqa: E402
+from viam.services.vision import CaptureAllResult, Vision  # noqa: E402
+from viam.utils import ValueTypes  # noqa: E402
 
 LOGGER = getLogger(__name__)
 

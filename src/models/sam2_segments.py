@@ -34,7 +34,7 @@ from viam.resource.easy_resource import EasyResource
 from viam.resource.types import Model, ModelFamily
 from viam.robot.client import RobotClient
 from viam.rpc.dial import DialOptions
-from viam.services.vision import *
+from viam.services.vision import CaptureAllResult, Vision
 from viam.utils import ValueTypes
 
 # Reuse shared utilities from the sam2 module.
