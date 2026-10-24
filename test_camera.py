@@ -33,7 +33,9 @@ if os.path.exists(env_path):
                 k, v = line.split("=", 1)
                 os.environ.setdefault(k.strip(), v.strip())
 
-ROBOT_ADDRESS = os.environ.get("VIAM_ROBOT_ADDRESS", "computer-demo-main.496koy7yd1.viam.cloud")
+ROBOT_ADDRESS = os.environ.get(
+    "VIAM_ROBOT_ADDRESS", "computer-demo-main.496koy7yd1.viam.cloud"
+)
 CAMERA_NAME = os.environ.get("VIAM_CAMERA_NAME", "camera-image-dir")
 MODEL_NAME = os.environ.get("SAM2_MODEL", "facebook/sam2.1-hiera-large")
 NUM_FRAMES = 50
@@ -72,7 +74,8 @@ async def main():
         ROBOT_ADDRESS,
         RobotClient.Options(
             dial_options=DialOptions.with_api_key(
-                api_key=api_key, api_key_id=api_key_id,
+                api_key=api_key,
+                api_key_id=api_key_id,
             ),
         ),
     )
@@ -112,8 +115,10 @@ async def main():
         if (i + 1) % 10 == 0:
             avg_pull = np.mean([t[0] for t in pull_times[-10:]])
             avg_gap = np.mean([t[1] for t in pull_times[-10:] if t[1] > 0])
-            print(f"  Pulled {i + 1}/{num_frames}  "
-                  f"(avg pull: {avg_pull:.0f}ms, avg gap: {avg_gap:.0f}ms)")
+            print(
+                f"  Pulled {i + 1}/{num_frames}  "
+                f"(avg pull: {avg_pull:.0f}ms, avg gap: {avg_gap:.0f}ms)"
+            )
 
     await robot.close()
 
@@ -121,13 +126,21 @@ async def main():
     pulls = [t[0] for t in pull_times]
     gaps = [t[1] for t in pull_times[1:]]
     print(f"\nFrame pull stats ({num_frames} frames):")
-    print(f"  Pull time:  min={min(pulls):.0f}ms  avg={np.mean(pulls):.0f}ms  max={max(pulls):.0f}ms")
+    print(
+        f"  Pull time:  min={min(pulls):.0f}ms  avg={np.mean(pulls):.0f}ms  max={max(pulls):.0f}ms"
+    )
     if gaps:
-        print(f"  Gap between: min={min(gaps):.0f}ms  avg={np.mean(gaps):.0f}ms  max={max(gaps):.0f}ms")
+        print(
+            f"  Gap between: min={min(gaps):.0f}ms  avg={np.mean(gaps):.0f}ms  max={max(gaps):.0f}ms"
+        )
     print(f"  Raw frames saved to {RAW_DIR}/")
 
     # Run SAM2 VideoPredictor.
-    device = "mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu")
+    device = (
+        "mps"
+        if torch.backends.mps.is_available()
+        else ("cuda" if torch.cuda.is_available() else "cpu")
+    )
     print(f"\nLoading SAM2 ({MODEL_NAME}) on {device}...")
     predictor = SAM2VideoPredictor.from_pretrained(MODEL_NAME, device=device)
 
@@ -138,7 +151,9 @@ async def main():
 
     print(f"Adding point prompt at {point} on frame 0...")
     predictor.add_new_points_or_box(
-        state, frame_idx=0, obj_id=1,
+        state,
+        frame_idx=0,
+        obj_id=1,
         points=np.array([list(point)], dtype=np.float32),
         labels=np.array([1], dtype=np.int32),
     )
@@ -151,7 +166,9 @@ async def main():
         results[frame_idx] = (mask, mask_to_bbox(mask))
     elapsed = time.time() - t0
     detected = sum(1 for _, (_, b) in results.items() if b is not None)
-    print(f"  {elapsed:.1f}s ({num_frames / elapsed:.1f} fps), {detected}/{num_frames} detections")
+    print(
+        f"  {elapsed:.1f}s ({num_frames / elapsed:.1f} fps), {detected}/{num_frames} detections"
+    )
 
     # Save annotated output.
     print(f"\nSaving annotated frames to {OUTPUT_DIR}/...")
@@ -171,14 +188,16 @@ async def main():
         if mask is not None and bbox is not None:
             # Draw green mask overlay.
             img_overlay = img.copy()
-            img_overlay[mask] = (img_overlay[mask] * 0.5 + np.array([0, 200, 0]) * 0.5).astype(np.uint8)
+            img_overlay[mask] = (
+                img_overlay[mask] * 0.5 + np.array([0, 200, 0]) * 0.5
+            ).astype(np.uint8)
             pil = Image.fromarray(img_overlay)
             draw = ImageDraw.Draw(pil)
             draw.text((10, 10), info, fill="white")
 
             x0, y0, x1, y1 = bbox
             draw.rectangle([x0, y0, x1, y1], outline="lime", width=3)
-            draw.text((x0, y0 - 15), f"glass [{x1-x0}x{y1-y0}]", fill="lime")
+            draw.text((x0, y0 - 15), f"glass [{x1 - x0}x{y1 - y0}]", fill="lime")
         else:
             draw.text((10, 30), "NO DETECTION", fill="red")
 
@@ -189,10 +208,18 @@ async def main():
     print(f"Building video: {video_path}")
     subprocess.run(
         [
-            "ffmpeg", "-y", "-framerate", "5",
-            "-i", f"{OUTPUT_DIR}/%d.jpeg",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "ffmpeg",
+            "-y",
+            "-framerate",
+            "5",
+            "-i",
+            f"{OUTPUT_DIR}/%d.jpeg",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-vf",
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             video_path,
         ],
         capture_output=True,
@@ -204,7 +231,13 @@ async def main():
     print(f"  Tracked video:    {video_path}")
 
     # Sample bboxes.
-    sample_indices = [0, num_frames // 4, num_frames // 2, 3 * num_frames // 4, num_frames - 1]
+    sample_indices = [
+        0,
+        num_frames // 4,
+        num_frames // 2,
+        3 * num_frames // 4,
+        num_frames - 1,
+    ]
     for i in sample_indices:
         b = results.get(i, (None, None))[1]
         print(f"  Frame {i:3d}: {b or 'no detection'}")

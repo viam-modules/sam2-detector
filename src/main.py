@@ -11,5 +11,5 @@ from models.sam2 import Sam2 as Sam2Model
 from models.sam2_segments import Sam2Segments as Sam2SegmentsModel
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     asyncio.run(Module.run_from_registry())

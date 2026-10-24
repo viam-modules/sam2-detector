@@ -30,7 +30,12 @@ class _QuatArray(Structure):
 
 
 class _OVArray(Structure):
-    _fields_ = [("o_x", c_double), ("o_y", c_double), ("o_z", c_double), ("theta", c_double)]
+    _fields_ = [
+        ("o_x", c_double),
+        ("o_y", c_double),
+        ("o_z", c_double),
+        ("theta", c_double),
+    ]
 
 
 _lib = None
@@ -45,6 +50,7 @@ def _get_lib():
     lib_path = None
     try:
         import viam.rpc
+
         rpc_dir = os.path.dirname(viam.rpc.__file__)
         for ext in (".so", ".dylib", ".dll"):
             candidate = os.path.join(rpc_dir, f"libviam_rust_utils{ext}")
@@ -56,7 +62,9 @@ def _get_lib():
 
     if lib_path is None and hasattr(sys, "_MEIPASS"):
         for ext in (".so", ".dylib", ".dll"):
-            candidate = os.path.join(sys._MEIPASS, "viam", "rpc", f"libviam_rust_utils{ext}")
+            candidate = os.path.join(
+                sys._MEIPASS, "viam", "rpc", f"libviam_rust_utils{ext}"
+            )
             if os.path.exists(candidate):
                 lib_path = candidate
                 break
@@ -99,9 +107,16 @@ def _get_lib():
     return _lib
 
 
-def transform_points_with_pose(o_x: float, o_y: float, o_z: float, theta_deg: float,
-                                tx: float, ty: float, tz: float,
-                                points: np.ndarray) -> np.ndarray:
+def transform_points_with_pose(
+    o_x: float,
+    o_y: float,
+    o_z: float,
+    theta_deg: float,
+    tx: float,
+    ty: float,
+    tz: float,
+    points: np.ndarray,
+) -> np.ndarray:
     """Transform 3D points using a Viam Pose (OrientationVector + translation).
 
     This uses Viam's rust utils to perform the exact same rotation as the Go RDK:
@@ -121,7 +136,9 @@ def transform_points_with_pose(o_x: float, o_y: float, o_z: float, theta_deg: fl
     theta_rad = math.radians(theta_deg)
 
     lib = _get_lib()
-    ov = lib.new_orientation_vector(c_double(o_x), c_double(o_y), c_double(o_z), c_double(theta_rad))
+    ov = lib.new_orientation_vector(
+        c_double(o_x), c_double(o_y), c_double(o_z), c_double(theta_rad)
+    )
     q = lib.quaternion_from_orientation_vector(ov)
     lib.free_orientation_vector_memory(ov)
 

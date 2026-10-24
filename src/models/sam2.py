@@ -19,6 +19,7 @@ import tqdm.auto as _tqdm_auto_module
 
 class _SilentTqdm:
     """A no-op tqdm replacement that acts as an identity iterator."""
+
     def __init__(self, iterable=None, *args, **kwargs):
         self._iterable = iterable
 
@@ -45,6 +46,7 @@ _tqdm_module.tqdm = _SilentTqdm
 _tqdm_auto_module.tqdm = _SilentTqdm
 
 import warnings
+
 warnings.filterwarnings("ignore", message="cannot import name '_C' from 'sam2'")
 
 import numpy as np
@@ -211,6 +213,7 @@ class Sam2(Vision, EasyResource):
 
         instance._camera_name = attrs["camera_name"].string_value
         from viam.components.camera import Camera
+
         instance._camera = dependencies[Camera.get_resource_name(instance._camera_name)]
         LOGGER.debug(f"Using camera: {instance._camera_name}")
 
@@ -222,12 +225,16 @@ class Sam2(Vision, EasyResource):
             LOGGER.debug(f"Initial point: {instance._initial_point}")
         else:
             instance._initial_point = None
-            LOGGER.warn("No initial point configured; tracking will not start until set_point is called")
+            LOGGER.warn(
+                "No initial point configured; tracking will not start until set_point is called"
+            )
 
         if "label" in attrs:
             instance._label = attrs["label"].string_value
         if "propagation_interval" in attrs:
-            instance._propagation_interval = int(attrs["propagation_interval"].number_value)
+            instance._propagation_interval = int(
+                attrs["propagation_interval"].number_value
+            )
         if "max_frames" in attrs:
             instance._max_frames = int(attrs["max_frames"].number_value)
         else:
@@ -252,7 +259,9 @@ class Sam2(Vision, EasyResource):
         has_x = "initial_point_x" in attrs
         has_y = "initial_point_y" in attrs
         if has_x != has_y:
-            raise ValueError("Must provide both initial_point_x and initial_point_y, or neither")
+            raise ValueError(
+                "Must provide both initial_point_x and initial_point_y, or neither"
+            )
         return [attrs["camera_name"].string_value], []
 
     async def _get_camera_image(self) -> np.ndarray:
@@ -300,7 +309,9 @@ class Sam2(Vision, EasyResource):
         shutil.rmtree(self._frame_dir, ignore_errors=True)
         self._frame_dir = new_dir
         self._window_start = new_start
-        LOGGER.debug(f"Compacted window: dropped {drop_count} frames, keeping {keep_count}")
+        LOGGER.debug(
+            f"Compacted window: dropped {drop_count} frames, keeping {keep_count}"
+        )
 
     def _run_propagation(self):
         """Run SAM2 video propagation on frames in the current window."""
@@ -341,7 +352,9 @@ class Sam2(Vision, EasyResource):
         if self._detections:
             max_idx = max(self._detections.keys())
             self._last_detection = self._detections[max_idx]
-        LOGGER.debug(f"Propagation complete: {len(self._detections)}/{window_size} detections")
+        LOGGER.debug(
+            f"Propagation complete: {len(self._detections)}/{window_size} detections"
+        )
 
     async def get_detections(
         self,
