@@ -55,9 +55,7 @@ async def main():
     vision = VisionClient.from_robot(robot, VISION_SERVICE_NAME)
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    print(
-        f"Capturing {NUM_FRAMES} frames from vision service '{VISION_SERVICE_NAME}'..."
-    )
+    print(f"Capturing {NUM_FRAMES} frames from vision service '{VISION_SERVICE_NAME}'...")
     detected_count = 0
     for i in range(NUM_FRAMES):
         t0 = time.time()
@@ -84,9 +82,7 @@ async def main():
 
         if pil is not None:
             draw = ImageDraw.Draw(pil)
-            draw.text(
-                (10, 10), f"#{i}  {elapsed_ms:.0f}ms  dets:{len(dets)}", fill="white"
-            )
+            draw.text((10, 10), f"#{i}  {elapsed_ms:.0f}ms  dets:{len(dets)}", fill="white")
             for det in dets:
                 x0, y0, x1, y1 = det.x_min, det.y_min, det.x_max, det.y_max
                 draw.rectangle([x0, y0, x1, y1], outline="lime", width=3)

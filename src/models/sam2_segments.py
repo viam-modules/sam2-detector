@@ -87,9 +87,7 @@ async def _connect_to_machine() -> Optional[RobotClient]:
         client = await RobotClient.at_address(
             host,
             RobotClient.Options(
-                dial_options=DialOptions.with_api_key(
-                    api_key=api_key, api_key_id=api_key_id
-                ),
+                dial_options=DialOptions.with_api_key(api_key=api_key, api_key_id=api_key_id),
             ),
         )
         LOGGER.debug(f"Connected to machine at {host} for frame transforms")
@@ -166,9 +164,7 @@ def _encode_pcd_binary(points_mm: np.ndarray, colors: np.ndarray) -> bytes:
 class Sam2Segments(Vision, EasyResource):
     """Vision service that combines upstream detections + SAM2 masks + depth → 3D point clouds."""
 
-    MODEL: ClassVar[Model] = Model(
-        ModelFamily("viam", "sam2-detector"), "sam2-segments"
-    )
+    MODEL: ClassVar[Model] = Model(ModelFamily("viam", "sam2-detector"), "sam2-segments")
 
     _predictor: SAM2ImagePredictor
     _device: str = "cpu"
@@ -187,9 +183,7 @@ class Sam2Segments(Vision, EasyResource):
     _lock: threading.Lock
 
     @classmethod
-    def new(
-        cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
-    ) -> Self:
+    def new(cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]) -> Self:
         instance = super().new(config, dependencies)
         instance._lock = threading.Lock()
         attrs = config.attributes.fields
@@ -198,13 +192,9 @@ class Sam2Segments(Vision, EasyResource):
         instance._camera_name = attrs["camera_name"].string_value
 
         # Resolve dependencies.
-        instance._detector = dependencies[
-            Vision.get_resource_name(instance._detector_name)
-        ]
+        instance._detector = dependencies[Vision.get_resource_name(instance._detector_name)]
         instance._camera = dependencies[Camera.get_resource_name(instance._camera_name)]
-        LOGGER.debug(
-            f"Using detector: {instance._detector_name}, camera: {instance._camera_name}"
-        )
+        LOGGER.debug(f"Using detector: {instance._detector_name}, camera: {instance._camera_name}")
 
         if "label" in attrs:
             instance._label = attrs["label"].string_value
@@ -227,9 +217,7 @@ class Sam2Segments(Vision, EasyResource):
             instance._debug = attrs["debug"].bool_value
 
         instance._device = _select_device()
-        LOGGER.debug(
-            f"Loading SAM2 ImagePredictor ({SAM2_MODEL_ID}) on {instance._device}"
-        )
+        LOGGER.debug(f"Loading SAM2 ImagePredictor ({SAM2_MODEL_ID}) on {instance._device}")
         instance._predictor = _load_image_predictor(instance._device)
         LOGGER.info("SAM2 ImagePredictor loaded")
 
@@ -239,18 +227,13 @@ class Sam2Segments(Vision, EasyResource):
         return instance
 
     @classmethod
-    def validate_config(
-        cls, config: ComponentConfig
-    ) -> Tuple[Sequence[str], Sequence[str]]:
+    def validate_config(cls, config: ComponentConfig) -> Tuple[Sequence[str], Sequence[str]]:
         attrs = config.attributes.fields
         if "detector_name" not in attrs or not attrs["detector_name"].string_value:
             raise ValueError("detector_name is required")
         if "camera_name" not in attrs or not attrs["camera_name"].string_value:
             raise ValueError("camera_name is required")
-        return [
-            attrs["detector_name"].string_value,
-            attrs["camera_name"].string_value,
-        ], []
+        return [attrs["detector_name"].string_value, attrs["camera_name"].string_value], []
 
     # ---- Core pipeline helpers ----
 
@@ -289,9 +272,7 @@ class Sam2Segments(Vision, EasyResource):
             filtered.append(det)
         return filtered
 
-    def _sam2_refine(
-        self, color_np: np.ndarray, bbox: Tuple[int, int, int, int]
-    ) -> Optional[np.ndarray]:
+    def _sam2_refine(self, color_np: np.ndarray, bbox: Tuple[int, int, int, int]) -> Optional[np.ndarray]:
         """Use SAM2 to get a precise mask from a bounding box prompt."""
         with self._lock:
             self._predictor.set_image(color_np)
@@ -302,9 +283,7 @@ class Sam2Segments(Vision, EasyResource):
                 return None
             return mask
 
-    def _overlay_masks(
-        self, image: ViamImage, masks: List[Tuple[np.ndarray, Detection]]
-    ) -> ViamImage:
+    def _overlay_masks(self, image: ViamImage, masks: List[Tuple[np.ndarray, Detection]]) -> ViamImage:
         """Overlay SAM2 segmentation masks on the image with 50% green highlighting."""
         from viam.media.video import CameraMimeType
 
@@ -313,9 +292,7 @@ class Sam2Segments(Vision, EasyResource):
         color = np.array(self._highlight_color, dtype=np.uint8)
         for mask, det in masks:
             bool_mask = mask.astype(bool)
-            overlay[bool_mask] = (
-                overlay[bool_mask].astype(np.float32) * 0.5 + color * 0.5
-            ).astype(np.uint8)
+            overlay[bool_mask] = (overlay[bool_mask].astype(np.float32) * 0.5 + color * 0.5).astype(np.uint8)
 
         pil = PILImage.fromarray(overlay)
         buf = io.BytesIO()
@@ -414,9 +391,7 @@ class Sam2Segments(Vision, EasyResource):
             self._robot_client = await _connect_to_machine()
         return self._robot_client
 
-    async def _transform_points_to_world(
-        self, points_mm: np.ndarray
-    ) -> Tuple[np.ndarray, str]:
+    async def _transform_points_to_world(self, points_mm: np.ndarray) -> Tuple[np.ndarray, str]:
         """Transform points from camera frame to world frame.
         Uses Viam's rust utils for OV→quaternion→rotation, matching the Go RDK exactly.
         Points are in mm. Returns (points_mm, reference_frame)."""
@@ -470,9 +445,7 @@ class Sam2Segments(Vision, EasyResource):
         props = await self._camera.get_properties()
         intrinsics = props.intrinsic_parameters
         if intrinsics is None:
-            raise ValueError(
-                "Camera must provide intrinsic parameters for 3D projection"
-            )
+            raise ValueError("Camera must provide intrinsic parameters for 3D projection")
         fx = intrinsics.focal_x_px
         fy = intrinsics.focal_y_px
         ppx = intrinsics.center_x_px
@@ -497,14 +470,10 @@ class Sam2Segments(Vision, EasyResource):
                 continue
 
             # Project masked pixels to 3D (pre-cleaning), then apply outlier removal.
-            points_raw, colors_raw = self._mask_to_points_raw(
-                mask, color_np, depth_np, fx, fy, ppx, ppy
-            )
+            points_raw, colors_raw = self._mask_to_points_raw(mask, color_np, depth_np, fx, fy, ppx, ppy)
             points, colors = self._clean_points(points_raw, colors_raw)
             if len(points) < self._min_points:
-                LOGGER.debug(
-                    f"Skipping segment with {len(points)} points (min={self._min_points})"
-                )
+                LOGGER.debug(f"Skipping segment with {len(points)} points (min={self._min_points})")
                 continue
 
             label = det.class_name or self._label or "object"
@@ -527,9 +496,7 @@ class Sam2Segments(Vision, EasyResource):
             results.append(pco)
 
             if self._debug:
-                points_raw_world, raw_ref_frame = await self._transform_points_to_world(
-                    points_raw
-                )
+                points_raw_world, raw_ref_frame = await self._transform_points_to_world(points_raw)
                 debug_pco = self._build_point_cloud_object(
                     points_raw_world,
                     colors_raw,
@@ -609,9 +576,7 @@ class Sam2Segments(Vision, EasyResource):
         timeout: Optional[float] = None,
     ) -> CaptureAllResult:
         if camera_name not in (self._camera_name, ""):
-            raise ValueError(
-                f"Camera name '{camera_name}' does not match configured camera '{self._camera_name}'."
-            )
+            raise ValueError(f"Camera name '{camera_name}' does not match configured camera '{self._camera_name}'.")
 
         result = CaptureAllResult()
         images, _ = await self._camera.get_images()
@@ -659,9 +624,7 @@ class Sam2Segments(Vision, EasyResource):
                 result.detections = await self._get_sam2_refined_detections(color_viam)
 
         if return_object_point_clouds:
-            result.objects = await self.get_object_point_clouds(
-                camera_name, extra=extra, timeout=timeout
-            )
+            result.objects = await self.get_object_point_clouds(camera_name, extra=extra, timeout=timeout)
 
         return result
 

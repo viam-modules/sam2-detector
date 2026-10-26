@@ -119,8 +119,7 @@ def _select_device() -> str:
     if torch.cuda.is_available():
         # torch.cuda covers ROCm too; HIP builds report AMD cards through this API.
         LOGGER.info(
-            f"Using GPU: {torch.cuda.get_device_name(0)} "
-            f"(torch {build['torch_version']}, {build['torch_gpu_support']})"
+            f"Using GPU: {torch.cuda.get_device_name(0)} (torch {build['torch_version']}, {build['torch_gpu_support']})"
         )
         return "cuda"
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -201,9 +200,7 @@ class Sam2(Vision, EasyResource):
     _lock: threading.Lock
 
     @classmethod
-    def new(
-        cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
-    ) -> Self:
+    def new(cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]) -> Self:
         instance = super().new(config, dependencies)
         instance._lock = threading.Lock()
         instance._detections = {}
@@ -227,16 +224,12 @@ class Sam2(Vision, EasyResource):
             LOGGER.debug(f"Initial point: {instance._initial_point}")
         else:
             instance._initial_point = None
-            LOGGER.warn(
-                "No initial point configured; tracking will not start until set_point is called"
-            )
+            LOGGER.warn("No initial point configured; tracking will not start until set_point is called")
 
         if "label" in attrs:
             instance._label = attrs["label"].string_value
         if "propagation_interval" in attrs:
-            instance._propagation_interval = int(
-                attrs["propagation_interval"].number_value
-            )
+            instance._propagation_interval = int(attrs["propagation_interval"].number_value)
         if "max_frames" in attrs:
             instance._max_frames = int(attrs["max_frames"].number_value)
         else:
@@ -252,18 +245,14 @@ class Sam2(Vision, EasyResource):
         return instance
 
     @classmethod
-    def validate_config(
-        cls, config: ComponentConfig
-    ) -> Tuple[Sequence[str], Sequence[str]]:
+    def validate_config(cls, config: ComponentConfig) -> Tuple[Sequence[str], Sequence[str]]:
         attrs = config.attributes.fields
         if "camera_name" not in attrs or not attrs["camera_name"].string_value:
             raise ValueError("camera_name is required")
         has_x = "initial_point_x" in attrs
         has_y = "initial_point_y" in attrs
         if has_x != has_y:
-            raise ValueError(
-                "Must provide both initial_point_x and initial_point_y, or neither"
-            )
+            raise ValueError("Must provide both initial_point_x and initial_point_y, or neither")
         return [attrs["camera_name"].string_value], []
 
     async def _get_camera_image(self) -> np.ndarray:
@@ -311,9 +300,7 @@ class Sam2(Vision, EasyResource):
         shutil.rmtree(self._frame_dir, ignore_errors=True)
         self._frame_dir = new_dir
         self._window_start = new_start
-        LOGGER.debug(
-            f"Compacted window: dropped {drop_count} frames, keeping {keep_count}"
-        )
+        LOGGER.debug(f"Compacted window: dropped {drop_count} frames, keeping {keep_count}")
 
     def _run_propagation(self):
         """Run SAM2 video propagation on frames in the current window."""
@@ -354,9 +341,7 @@ class Sam2(Vision, EasyResource):
         if self._detections:
             max_idx = max(self._detections.keys())
             self._last_detection = self._detections[max_idx]
-        LOGGER.debug(
-            f"Propagation complete: {len(self._detections)}/{window_size} detections"
-        )
+        LOGGER.debug(f"Propagation complete: {len(self._detections)}/{window_size} detections")
 
     async def get_detections(
         self,
@@ -414,10 +399,7 @@ class Sam2(Vision, EasyResource):
         timeout: Optional[float] = None,
     ) -> CaptureAllResult:
         if camera_name not in (self._camera_name, ""):
-            raise ValueError(
-                f"Camera name '{camera_name}' does not match "
-                f"configured camera '{self._camera_name}'."
-            )
+            raise ValueError(f"Camera name '{camera_name}' does not match configured camera '{self._camera_name}'.")
 
         result = CaptureAllResult()
 
@@ -429,9 +411,7 @@ class Sam2(Vision, EasyResource):
             result.image = images[0]
 
         if return_detections:
-            result.detections = await self.get_detections(
-                images[0], extra=extra, timeout=timeout
-            )
+            result.detections = await self.get_detections(images[0], extra=extra, timeout=timeout)
 
         return result
 
