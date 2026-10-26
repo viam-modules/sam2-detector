@@ -17,11 +17,11 @@ import time
 
 import numpy as np
 import torch
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 from sam2.sam2_video_predictor import SAM2VideoPredictor
+from viam.components.camera import Camera
 from viam.robot.client import RobotClient
 from viam.rpc.dial import DialOptions
-from viam.components.camera import Camera
 
 # Load env vars from viam.env if it exists.
 env_path = os.path.join(os.path.dirname(__file__), "..", "viam.env")
@@ -72,7 +72,8 @@ async def main():
         ROBOT_ADDRESS,
         RobotClient.Options(
             dial_options=DialOptions.with_api_key(
-                api_key=api_key, api_key_id=api_key_id,
+                api_key=api_key,
+                api_key_id=api_key_id,
             ),
         ),
     )
@@ -112,8 +113,7 @@ async def main():
         if (i + 1) % 10 == 0:
             avg_pull = np.mean([t[0] for t in pull_times[-10:]])
             avg_gap = np.mean([t[1] for t in pull_times[-10:] if t[1] > 0])
-            print(f"  Pulled {i + 1}/{num_frames}  "
-                  f"(avg pull: {avg_pull:.0f}ms, avg gap: {avg_gap:.0f}ms)")
+            print(f"  Pulled {i + 1}/{num_frames}  (avg pull: {avg_pull:.0f}ms, avg gap: {avg_gap:.0f}ms)")
 
     await robot.close()
 
@@ -138,7 +138,9 @@ async def main():
 
     print(f"Adding point prompt at {point} on frame 0...")
     predictor.add_new_points_or_box(
-        state, frame_idx=0, obj_id=1,
+        state,
+        frame_idx=0,
+        obj_id=1,
         points=np.array([list(point)], dtype=np.float32),
         labels=np.array([1], dtype=np.int32),
     )
@@ -178,7 +180,7 @@ async def main():
 
             x0, y0, x1, y1 = bbox
             draw.rectangle([x0, y0, x1, y1], outline="lime", width=3)
-            draw.text((x0, y0 - 15), f"glass [{x1-x0}x{y1-y0}]", fill="lime")
+            draw.text((x0, y0 - 15), f"glass [{x1 - x0}x{y1 - y0}]", fill="lime")
         else:
             draw.text((10, 30), "NO DETECTION", fill="red")
 
@@ -189,16 +191,24 @@ async def main():
     print(f"Building video: {video_path}")
     subprocess.run(
         [
-            "ffmpeg", "-y", "-framerate", "5",
-            "-i", f"{OUTPUT_DIR}/%d.jpeg",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "ffmpeg",
+            "-y",
+            "-framerate",
+            "5",
+            "-i",
+            f"{OUTPUT_DIR}/%d.jpeg",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-vf",
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             video_path,
         ],
         capture_output=True,
     )
 
-    print(f"\nDone!")
+    print("\nDone!")
     print(f"  Raw frames:      {RAW_DIR}/")
     print(f"  Annotated frames: {OUTPUT_DIR}/")
     print(f"  Tracked video:    {video_path}")

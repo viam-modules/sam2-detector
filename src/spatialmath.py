@@ -45,6 +45,7 @@ def _get_lib():
     lib_path = None
     try:
         import viam.rpc
+
         rpc_dir = os.path.dirname(viam.rpc.__file__)
         for ext in (".so", ".dylib", ".dll"):
             candidate = os.path.join(rpc_dir, f"libviam_rust_utils{ext}")
@@ -99,9 +100,9 @@ def _get_lib():
     return _lib
 
 
-def transform_points_with_pose(o_x: float, o_y: float, o_z: float, theta_deg: float,
-                                tx: float, ty: float, tz: float,
-                                points: np.ndarray) -> np.ndarray:
+def transform_points_with_pose(
+    o_x: float, o_y: float, o_z: float, theta_deg: float, tx: float, ty: float, tz: float, points: np.ndarray
+) -> np.ndarray:
     """Transform 3D points using a Viam Pose (OrientationVector + translation).
 
     This uses Viam's rust utils to perform the exact same rotation as the Go RDK:

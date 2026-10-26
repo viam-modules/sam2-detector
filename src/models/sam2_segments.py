@@ -17,15 +17,13 @@ from typing_extensions import Self
 from viam.components.camera import Camera
 from viam.logging import getLogger
 from viam.media.video import ViamImage
-from viam.robot.client import RobotClient
-from viam.rpc.dial import DialOptions
 from viam.proto.app.robot import ComponentConfig
 from viam.proto.common import (
-    Geometry,
     GeometriesInFrame,
+    Geometry,
+    PointCloudObject,
     Pose,
     PoseInFrame,
-    PointCloudObject,
     RectangularPrism,
     ResourceName,
     Vector3,
@@ -34,11 +32,20 @@ from viam.proto.service.vision import Classification, Detection, GetPropertiesRe
 from viam.resource.base import ResourceBase
 from viam.resource.easy_resource import EasyResource
 from viam.resource.types import Model, ModelFamily
-from viam.services.vision import *
+from viam.robot.client import RobotClient
+from viam.rpc.dial import DialOptions
+from viam.services.vision import CaptureAllResult, Vision
 from viam.utils import ValueTypes
 
 # Reuse shared utilities from the sam2 module.
-from models.sam2 import _select_device, _find_bundled_checkpoint, _viam_image_to_numpy, _mask_to_bbox, SAM2_MODEL_ID, torch_build_info
+from models.sam2 import (
+    SAM2_MODEL_ID,
+    _find_bundled_checkpoint,
+    _mask_to_bbox,
+    _select_device,
+    _viam_image_to_numpy,
+    torch_build_info,
+)
 from spatialmath import transform_points_with_pose
 
 LOGGER = getLogger(__name__)
@@ -55,12 +62,11 @@ LOGGER = getLogger(__name__)
 MAX_DEPTH_MM = 20000
 
 
-
-
 async def _connect_to_machine() -> Optional[RobotClient]:
     """Connect to the parent machine using env vars set by viam-server.
     Returns None if env vars are not set (e.g. running standalone)."""
     import os as _os
+
     host = _os.environ.get("VIAM_MACHINE_FQDN", "")
     api_key_id = _os.environ.get("VIAM_API_KEY_ID", "")
     api_key = _os.environ.get("VIAM_API_KEY", "")
@@ -96,6 +102,7 @@ def _load_image_predictor(device: str) -> SAM2ImagePredictor:
     config_name, ckpt_path = _find_bundled_checkpoint()
     LOGGER.debug(f"Loading SAM2 ImagePredictor from bundled checkpoint: {ckpt_path}")
     from sam2.build_sam import build_sam2
+
     model = build_sam2(config_name, ckpt_path, device=device)
     return SAM2ImagePredictor(model)
 
@@ -104,7 +111,9 @@ def _depth_image_to_numpy(image: ViamImage) -> np.ndarray:
     """Convert a Viam depth image to a numpy array (H, W) of depth in mm."""
     mime = getattr(image, "mime_type", "")
     data = image.data
-    LOGGER.debug(f"Depth image: mime={mime}, data_len={len(data)}, first_bytes={data[:24].hex() if len(data) >= 24 else data.hex()}")
+    LOGGER.debug(
+        f"Depth image: mime={mime}, data_len={len(data)}, first_bytes={data[:24].hex() if len(data) >= 24 else data.hex()}"
+    )
 
     if "viam" in str(mime) and "dep" in str(mime):
         # Viam raw depth format uses bytes_to_depth_array from the SDK.
@@ -174,9 +183,7 @@ class Sam2Segments(Vision, EasyResource):
     _lock: threading.Lock
 
     @classmethod
-    def new(
-        cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
-    ) -> Self:
+    def new(cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]) -> Self:
         instance = super().new(config, dependencies)
         instance._lock = threading.Lock()
         attrs = config.attributes.fields
@@ -220,9 +227,7 @@ class Sam2Segments(Vision, EasyResource):
         return instance
 
     @classmethod
-    def validate_config(
-        cls, config: ComponentConfig
-    ) -> Tuple[Sequence[str], Sequence[str]]:
+    def validate_config(cls, config: ComponentConfig) -> Tuple[Sequence[str], Sequence[str]]:
         attrs = config.attributes.fields
         if "detector_name" not in attrs or not attrs["detector_name"].string_value:
             raise ValueError("detector_name is required")
@@ -272,9 +277,7 @@ class Sam2Segments(Vision, EasyResource):
         with self._lock:
             self._predictor.set_image(color_np)
             box = np.array(list(bbox), dtype=np.float32)
-            masks, scores, _ = self._predictor.predict(
-                box=box, multimask_output=False
-            )
+            masks, scores, _ = self._predictor.predict(box=box, multimask_output=False)
             mask = masks[0].astype(bool)
             if not mask.any():
                 return None
@@ -301,7 +304,10 @@ class Sam2Segments(Vision, EasyResource):
         mask: np.ndarray,
         color_np: np.ndarray,
         depth_np: np.ndarray,
-        fx: float, fy: float, ppx: float, ppy: float,
+        fx: float,
+        fy: float,
+        ppx: float,
+        ppy: float,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Project masked pixels to 3D using pinhole camera model, with only basic
         valid-depth filtering applied (no median-based outlier cleaning).
@@ -327,7 +333,9 @@ class Sam2Segments(Vision, EasyResource):
         return points, colors
 
     def _clean_points(
-        self, points: np.ndarray, colors: np.ndarray,
+        self,
+        points: np.ndarray,
+        colors: np.ndarray,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """Apply median ± depth_threshold_mm outlier removal on Z."""
         if self._depth_threshold_mm <= 0 or len(points) == 0:
@@ -351,12 +359,21 @@ class Sam2Segments(Vision, EasyResource):
 
         geometry = Geometry(
             center=Pose(
-                x=float(center[0]), y=float(center[1]), z=float(center[2]),
-                o_x=0, o_y=0, o_z=1, theta=0,
+                x=float(center[0]),
+                y=float(center[1]),
+                z=float(center[2]),
+                o_x=0,
+                o_y=0,
+                o_z=1,
+                theta=0,
             ),
-            box=RectangularPrism(dims_mm=Vector3(
-                x=float(dims[0]), y=float(dims[1]), z=float(dims[2]),
-            )),
+            box=RectangularPrism(
+                dims_mm=Vector3(
+                    x=float(dims[0]),
+                    y=float(dims[1]),
+                    z=float(dims[2]),
+                )
+            ),
             label=label,
         )
 
@@ -399,8 +416,13 @@ class Sam2Segments(Vision, EasyResource):
 
             # Use Viam rust utils for the transform (same math as Go RDK).
             transformed = transform_points_with_pose(
-                p.o_x, p.o_y, p.o_z, p.theta,
-                p.x, p.y, p.z,
+                p.o_x,
+                p.o_y,
+                p.o_z,
+                p.theta,
+                p.x,
+                p.y,
+                p.z,
                 points_mm,
             )
             LOGGER.debug(f"Transformed {len(points_mm)} points to world frame")
@@ -448,9 +470,7 @@ class Sam2Segments(Vision, EasyResource):
                 continue
 
             # Project masked pixels to 3D (pre-cleaning), then apply outlier removal.
-            points_raw, colors_raw = self._mask_to_points_raw(
-                mask, color_np, depth_np, fx, fy, ppx, ppy
-            )
+            points_raw, colors_raw = self._mask_to_points_raw(mask, color_np, depth_np, fx, fy, ppx, ppy)
             points, colors = self._clean_points(points_raw, colors_raw)
             if len(points) < self._min_points:
                 LOGGER.debug(f"Skipping segment with {len(points)} points (min={self._min_points})")
@@ -478,7 +498,10 @@ class Sam2Segments(Vision, EasyResource):
             if self._debug:
                 points_raw_world, raw_ref_frame = await self._transform_points_to_world(points_raw)
                 debug_pco = self._build_point_cloud_object(
-                    points_raw_world, colors_raw, f"debug_{label}_before_cleaning", raw_ref_frame,
+                    points_raw_world,
+                    colors_raw,
+                    f"debug_{label}_before_cleaning",
+                    raw_ref_frame,
                 )
                 results.append(debug_pco)
 
@@ -506,11 +529,16 @@ class Sam2Segments(Vision, EasyResource):
                 f"-> SAM2 mask bbox=({x_min},{y_min},{x_max},{y_max}) "
                 f"label={det.class_name!r} conf={det.confidence:.2f}"
             )
-            refined.append(Detection(
-                x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max,
-                confidence=det.confidence,
-                class_name=det.class_name,
-            ))
+            refined.append(
+                Detection(
+                    x_min=x_min,
+                    y_min=y_min,
+                    x_max=x_max,
+                    y_max=y_max,
+                    confidence=det.confidence,
+                    class_name=det.class_name,
+                )
+            )
         return refined
 
     async def get_detections(
@@ -548,9 +576,7 @@ class Sam2Segments(Vision, EasyResource):
         timeout: Optional[float] = None,
     ) -> CaptureAllResult:
         if camera_name not in (self._camera_name, ""):
-            raise ValueError(
-                f"Camera name '{camera_name}' does not match configured camera '{self._camera_name}'."
-            )
+            raise ValueError(f"Camera name '{camera_name}' does not match configured camera '{self._camera_name}'.")
 
         result = CaptureAllResult()
         images, _ = await self._camera.get_images()
@@ -584,17 +610,21 @@ class Sam2Segments(Vision, EasyResource):
                     mask_bbox = _mask_to_bbox(mask)
                     if mask_bbox:
                         x_min, y_min, x_max, y_max = mask_bbox
-                        result.detections.append(Detection(
-                            x_min=x_min, y_min=y_min, x_max=x_max, y_max=y_max,
-                            confidence=det.confidence, class_name=det.class_name,
-                        ))
+                        result.detections.append(
+                            Detection(
+                                x_min=x_min,
+                                y_min=y_min,
+                                x_max=x_max,
+                                y_max=y_max,
+                                confidence=det.confidence,
+                                class_name=det.class_name,
+                            )
+                        )
             else:
                 result.detections = await self._get_sam2_refined_detections(color_viam)
 
         if return_object_point_clouds:
-            result.objects = await self.get_object_point_clouds(
-                camera_name, extra=extra, timeout=timeout
-            )
+            result.objects = await self.get_object_point_clouds(camera_name, extra=extra, timeout=timeout)
 
         return result
 

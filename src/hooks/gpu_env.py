@@ -8,6 +8,7 @@ resolved by the loader through the RPATH entries that PyInstaller and the nvidia
 wheels already provide; setting LD_LIBRARY_PATH at this point would be useless,
 since glibc reads it once at process start.
 """
+
 import os
 
 # Required for AMD GPUs that are not on PyTorch's official ROCm support list

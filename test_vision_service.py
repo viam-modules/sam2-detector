@@ -12,7 +12,6 @@ import os
 import subprocess
 import time
 
-import numpy as np
 from PIL import Image, ImageDraw
 from viam.robot.client import RobotClient
 from viam.rpc.dial import DialOptions
@@ -46,7 +45,8 @@ async def main():
         ROBOT_ADDRESS,
         RobotClient.Options(
             dial_options=DialOptions.with_api_key(
-                api_key=api_key, api_key_id=api_key_id,
+                api_key=api_key,
+                api_key_id=api_key_id,
             ),
         ),
     )
@@ -94,8 +94,10 @@ async def main():
             print(f"  Frame {i}: no image, {len(dets)} detections")
 
         if (i + 1) % 10 == 0:
-            print(f"  Frame {i + 1}/{NUM_FRAMES}  ({elapsed_ms:.0f}ms)  "
-                  f"dets: {len(dets)}  total_detected: {detected_count}/{i + 1}")
+            print(
+                f"  Frame {i + 1}/{NUM_FRAMES}  ({elapsed_ms:.0f}ms)  "
+                f"dets: {len(dets)}  total_detected: {detected_count}/{i + 1}"
+            )
 
     await robot.close()
 
@@ -104,10 +106,18 @@ async def main():
     print(f"Building video: {video_path}")
     subprocess.run(
         [
-            "ffmpeg", "-y", "-framerate", "5",
-            "-i", f"{OUTPUT_DIR}/%d.jpeg",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+            "ffmpeg",
+            "-y",
+            "-framerate",
+            "5",
+            "-i",
+            f"{OUTPUT_DIR}/%d.jpeg",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-vf",
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             video_path,
         ],
         capture_output=True,

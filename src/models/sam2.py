@@ -19,6 +19,7 @@ import tqdm.auto as _tqdm_auto_module
 
 class _SilentTqdm:
     """A no-op tqdm replacement that acts as an identity iterator."""
+
     def __init__(self, iterable=None, *args, **kwargs):
         self._iterable = iterable
 
@@ -44,25 +45,28 @@ class _SilentTqdm:
 _tqdm_module.tqdm = _SilentTqdm
 _tqdm_auto_module.tqdm = _SilentTqdm
 
-import warnings
+# SAM2 binds tqdm at import time and torch reads HSA_OVERRIDE_GFX_VERSION, so
+# these imports must stay below the setup above.
+import warnings  # noqa: E402
+
 warnings.filterwarnings("ignore", message="cannot import name '_C' from 'sam2'")
 
-import numpy as np
-import torch
-from PIL import Image as PILImage
-from sam2.build_sam import build_sam2_video_predictor, HF_MODEL_ID_TO_FILENAMES
-from sam2.sam2_video_predictor import SAM2VideoPredictor
-from typing_extensions import Self
-from viam.media.video import ViamImage
-from viam.proto.app.robot import ComponentConfig
-from viam.proto.common import PointCloudObject, ResourceName
-from viam.proto.service.vision import Classification, Detection, GetPropertiesResponse
-from viam.logging import getLogger
-from viam.resource.base import ResourceBase
-from viam.resource.easy_resource import EasyResource
-from viam.resource.types import Model, ModelFamily
-from viam.services.vision import *
-from viam.utils import ValueTypes
+import numpy as np  # noqa: E402
+import torch  # noqa: E402
+from PIL import Image as PILImage  # noqa: E402
+from sam2.build_sam import HF_MODEL_ID_TO_FILENAMES, build_sam2_video_predictor  # noqa: E402
+from sam2.sam2_video_predictor import SAM2VideoPredictor  # noqa: E402
+from typing_extensions import Self  # noqa: E402
+from viam.logging import getLogger  # noqa: E402
+from viam.media.video import ViamImage  # noqa: E402
+from viam.proto.app.robot import ComponentConfig  # noqa: E402
+from viam.proto.common import PointCloudObject, ResourceName  # noqa: E402
+from viam.proto.service.vision import Classification, Detection, GetPropertiesResponse  # noqa: E402
+from viam.resource.base import ResourceBase  # noqa: E402
+from viam.resource.easy_resource import EasyResource  # noqa: E402
+from viam.resource.types import Model, ModelFamily  # noqa: E402
+from viam.services.vision import CaptureAllResult, Vision  # noqa: E402
+from viam.utils import ValueTypes  # noqa: E402
 
 LOGGER = getLogger(__name__)
 
@@ -115,8 +119,7 @@ def _select_device() -> str:
     if torch.cuda.is_available():
         # torch.cuda covers ROCm too; HIP builds report AMD cards through this API.
         LOGGER.info(
-            f"Using GPU: {torch.cuda.get_device_name(0)} "
-            f"(torch {build['torch_version']}, {build['torch_gpu_support']})"
+            f"Using GPU: {torch.cuda.get_device_name(0)} (torch {build['torch_version']}, {build['torch_gpu_support']})"
         )
         return "cuda"
     if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -197,9 +200,7 @@ class Sam2(Vision, EasyResource):
     _lock: threading.Lock
 
     @classmethod
-    def new(
-        cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]
-    ) -> Self:
+    def new(cls, config: ComponentConfig, dependencies: Mapping[ResourceName, ResourceBase]) -> Self:
         instance = super().new(config, dependencies)
         instance._lock = threading.Lock()
         instance._detections = {}
@@ -211,6 +212,7 @@ class Sam2(Vision, EasyResource):
 
         instance._camera_name = attrs["camera_name"].string_value
         from viam.components.camera import Camera
+
         instance._camera = dependencies[Camera.get_resource_name(instance._camera_name)]
         LOGGER.debug(f"Using camera: {instance._camera_name}")
 
@@ -243,9 +245,7 @@ class Sam2(Vision, EasyResource):
         return instance
 
     @classmethod
-    def validate_config(
-        cls, config: ComponentConfig
-    ) -> Tuple[Sequence[str], Sequence[str]]:
+    def validate_config(cls, config: ComponentConfig) -> Tuple[Sequence[str], Sequence[str]]:
         attrs = config.attributes.fields
         if "camera_name" not in attrs or not attrs["camera_name"].string_value:
             raise ValueError("camera_name is required")
@@ -399,10 +399,7 @@ class Sam2(Vision, EasyResource):
         timeout: Optional[float] = None,
     ) -> CaptureAllResult:
         if camera_name not in (self._camera_name, ""):
-            raise ValueError(
-                f"Camera name '{camera_name}' does not match "
-                f"configured camera '{self._camera_name}'."
-            )
+            raise ValueError(f"Camera name '{camera_name}' does not match configured camera '{self._camera_name}'.")
 
         result = CaptureAllResult()
 
@@ -414,9 +411,7 @@ class Sam2(Vision, EasyResource):
             result.image = images[0]
 
         if return_detections:
-            result.detections = await self.get_detections(
-                images[0], extra=extra, timeout=timeout
-            )
+            result.detections = await self.get_detections(images[0], extra=extra, timeout=timeout)
 
         return result
 
